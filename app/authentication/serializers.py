@@ -143,19 +143,36 @@ class ResetPasswordSerializer(serializers.Serializer):
     Request:
     {
         "token": "<reset_token>",
-        "password": "<new_password>"
+        "password": "<new_password>" (min 10 chars, requires uppercase, number, symbol)
     }
     """
     
     token = serializers.CharField(max_length=64)
     password = serializers.CharField(
         write_only=True,
-        min_length=8,
+        min_length=10,  # Matches password policy requirement
         style={'input_type': 'password'}
     )
     
     def validate_password(self, value):
-        """Validate password against Django's password validators."""
+        """Validate password against policy requirements and Django's password validators."""
+        # Minimum length check (10 characters)
+        if len(value) < 10:
+            raise serializers.ValidationError('Password must be at least 10 characters long.')
+        
+        # Require uppercase
+        if not any(c.isupper() for c in value):
+            raise serializers.ValidationError('Password must contain at least one uppercase letter.')
+        
+        # Require number
+        if not any(c.isdigit() for c in value):
+            raise serializers.ValidationError('Password must contain at least one number.')
+        
+        # Require symbol
+        if not any(c in '!@#$%^&*()_+-=[]{}|;:,.<>?' for c in value):
+            raise serializers.ValidationError('Password must contain at least one symbol.')
+        
+        # Also validate against Django's password validators
         validate_password(value)
         return value
 

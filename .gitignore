@@ -111,3 +111,12 @@ celerybeat.pid
 *.tmp
 *.temp
 .cache/
+
+# QA and development artifacts (should not be in production codebase)
+artifacts/
+qa/
+reports/
+assignment.txt
+CHANGELOG.md
+*.md.backup
+test-output.txt

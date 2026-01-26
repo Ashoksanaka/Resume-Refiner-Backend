@@ -108,29 +108,39 @@ DATABASES = {
 AUTH_USER_MODEL = 'authentication.User'
 
 AUTH_PASSWORD_VALIDATORS = [
-    # {
-    #     'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
-    # },
-    # {
-    #     'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
-    #     'OPTIONS': {'min_length': 8},
-    # },
-    # {
-    #     'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
-    # },
-    # {
-    #     'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
-    # },
+    {
+        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        'OPTIONS': {'min_length': 10},  # Matches password policy requirement
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+    },
 ]
 
 # Session settings for cookie-based auth
 SESSION_ENGINE = 'django.contrib.sessions.backends.db'
 SESSION_COOKIE_NAME = 'sessionid'
 SESSION_COOKIE_AGE = 86400  # 24 hours
-SESSION_COOKIE_HTTPONLY = True
-# In development (http://localhost), cookies must not require HTTPS
-SESSION_COOKIE_SECURE = not DEBUG  # Only require HTTPS in production
-SESSION_COOKIE_SAMESITE = 'Lax' if DEBUG else 'None'  # Lax works for same-site dev
+SESSION_COOKIE_HTTPONLY = True  # Prevent JavaScript access to cookies
+
+# Cookie security configuration - environment-aware
+# In production: Secure=True, SameSite=None (for cross-site requests)
+# In development: Secure=False, SameSite=Lax (for localhost)
+SESSION_COOKIE_SECURE = config('SESSION_COOKIE_SECURE', default=not DEBUG, cast=bool)
+SESSION_COOKIE_SAMESITE = config('SESSION_COOKIE_SAMESITE', default='Lax' if DEBUG else 'Lax')
+
+# Security validation: When SameSite=None, Secure MUST be True (browser requirement)
+if SESSION_COOKIE_SAMESITE == 'None' and not SESSION_COOKIE_SECURE:
+    raise ValueError(
+        "SESSION_COOKIE_SECURE must be True when SESSION_COOKIE_SAMESITE is 'None'. "
+        "Browsers reject cookies with SameSite=None without Secure flag."
+    )
 
 
 # =============================================================================
@@ -316,6 +326,57 @@ DATA_UPLOAD_MAX_NUMBER_FIELDS = config('DATA_UPLOAD_MAX_NUMBER_FIELDS', default=
 # IMPORTANT: Do not log PII (profile data, job descriptions)
 # =============================================================================
 
+import logging
+import re
+
+
+class PIIFilter(logging.Filter):
+    """
+    Filter to redact PII (Personally Identifiable Information) from log records.
+    
+    Prevents logging of:
+    - Email addresses
+    - Phone numbers
+    - SSNs
+    - Other sensitive patterns
+    """
+    # Patterns to match and redact
+    PII_PATTERNS = [
+        # Email addresses
+        (r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '[REDACTED_EMAIL]'),
+        # Phone numbers (various formats)
+        (r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', '[REDACTED_PHONE]'),
+        (r'\b\+?\d{1,3}[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b', '[REDACTED_PHONE]'),
+        # SSNs
+        (r'\b\d{3}-\d{2}-\d{4}\b', '[REDACTED_SSN]'),
+        # Long numeric sequences (potential credit cards, account numbers)
+        (r'\b\d{13,}\b', '[REDACTED_NUMBER]'),
+    ]
+    
+    def filter(self, record):
+        """
+        Filter log record by redacting PII patterns.
+        
+        Args:
+            record: LogRecord instance
+            
+        Returns:
+            True (always allows the record, but modifies it)
+        """
+        # Get the message
+        message = str(record.getMessage())
+        
+        # Apply all PII patterns
+        for pattern, replacement in self.PII_PATTERNS:
+            message = re.sub(pattern, replacement, message, flags=re.IGNORECASE)
+        
+        # Update the record
+        record.msg = message
+        record.args = ()  # Clear args since we've formatted the message
+        
+        return True
+
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -329,10 +390,16 @@ LOGGING = {
             'style': '{',
         },
     },
+    'filters': {
+        'pii_filter': {
+            '()': PIIFilter,
+        },
+    },
     'handlers': {
         'console': {
             'class': 'logging.StreamHandler',
             'formatter': 'simple',
+            'filters': ['pii_filter'],  # Apply PII filtering to all console logs
         },
     },
     'root': {

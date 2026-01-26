@@ -1,0 +1,302 @@
+{
+  "personalInfo": {
+    "full_name": "Jane Smith",
+    "email": "jane.smith@example.com",
+    "phone_number": "+1-555-123-4567",
+    "location": "San Francisco, USA",
+    "portfolio_url": "https://janesmith.dev"
+  },
+  "summary": "Senior software engineer with 10+ years of experience in building scalable web applications. Expert in Python, Django, React, and cloud infrastructure. Led multiple teams to deliver high-impact products serving millions of users.",
+  "experience": [
+    {
+      "company": "Tech Corp",
+      "title": "Senior Software Engineer",
+      "start_date": "2020-01-01",
+      "end_date": null,
+      "description": "Led development of microservices architecture serving 10M+ users. Implemented CI/CD pipelines reducing deployment time by 70%. Mentored team of 5 junior engineers."
+    },
+    {
+      "company": "StartupXYZ",
+      "title": "Full Stack Developer",
+      "start_date": "2018-06-01",
+      "end_date": "2019-12-31",
+      "description": "Built MVP from scratch using Django and React. Implemented real-time features using WebSockets. Achieved 99.9% uptime."
+    }
+  ],
+  "education": [
+    {
+      "institution": "University of Technology",
+      "degree": "Bachelor of Science in Computer Science",
+      "start_date": "2010-09-01",
+      "end_date": "2014-05-30",
+      "description": "Graduated magna cum laude. Focused on algorithms and distributed systems."
+    }
+  ],
+  "skills": [
+    "Python",
+    "JavaScript",
+    "React",
+    "Django",
+    "PostgreSQL",
+    "Redis",
+    "Docker",
+    "Kubernetes",
+    "AWS",
+    "CI/CD"
+  ],
+  "certifications": [
+    {
+      "name": "AWS Certified Solutions Architect",
+      "issuing_organization": "Amazon Web Services",
+      "issue_date": "2022-06-15"
+    },
+    {
+      "name": "Kubernetes Administrator",
+      "issuing_organization": "CNCF",
+      "issue_date": "2021-03-20"
+    }
+  ],
+  "projects": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "title": "E-commerce Platform",
+      "role": "Lead Developer",
+      "description": "Built a scalable e-commerce platform serving 1M+ users. Implemented microservices architecture, payment processing, and inventory management.",
+      "start_date": "2021-01-01",
+      "end_date": "2022-12-31",
+      "ongoing": false,
+      "technologies": ["python", "django", "postgresql", "redis", "docker"],
+      "link": "https://example.com/project",
+      "achievements": [
+        "Reduced load time by 50%",
+        "Achieved 99.9% uptime",
+        "Processed $10M+ in transactions"
+      ]
+    },
+    {
+      "id": "660e8400-e29b-41d4-a716-446655440001",
+      "title": "Open Source Library",
+      "role": "Maintainer",
+      "description": "Created and maintain a popular open-source library with 5K+ GitHub stars.",
+      "start_date": "2019-01-01",
+      "end_date": null,
+      "ongoing": true,
+      "technologies": ["python", "open-source"],
+      "link": "https://github.com/janesmith/library",
+      "achievements": [
+        "5K+ GitHub stars",
+        "Used by 500+ companies"
+      ]
+    }
+  ],
+  "achievements": [
+    {
+      "id": "770e8400-e29b-41d4-a716-446655440002",
+      "title": "Employee of the Year",
+      "description": "Recognized for outstanding contributions to product development and team leadership",
+      "issuer": "Tech Corp",
+      "date": "2023-12-01"
+    },
+    {
+      "id": "880e8400-e29b-41d4-a716-446655440003",
+      "title": "Best Paper Award",
+      "description": "Awarded for research paper on distributed systems",
+      "issuer": "IEEE",
+      "date": "2022-09-15"
+    }
+  ],
+  "areas_of_interest": [
+    "machine learning",
+    "cloud computing",
+    "distributed systems",
+    "open source"
+  ],
+  "hobbies": [
+    "Reading",
+    "Hiking",
+    "Photography",
+    "Open Source Contributions"
+  ],
+  "address": {
+    "street": "123 Main St",
+    "city": "San Francisco",
+    "region": "California",
+    "country": "USA",
+    "postal_code": "94102",
+    "geolocation": {
+      "lat": 37.7749,
+      "lon": -122.4194
+    }
+  },
+  "social_urls": {
+    "linkedin": "https://linkedin.com/in/janesmith",
+    "github": "https://github.com/janesmith",
+    "twitter": "https://twitter.com/janesmith",
+    "portfolio": "https://janesmith.dev",
+    "website": "https://janesmith.com",
+    "other": [
+      {
+        "label": "Medium",
+        "url": "https://medium.com/@janesmith"
+      },
+      {
+        "label": "Dev.to",
+        "url": "https://dev.to/janesmith"
+      }
+    ]
+  },
+  "profile_picture": {
+    "url": "https://cdn.example.com/profiles/janesmith.jpg",
+    "thumbnail_url": "https://cdn.example.com/profiles/janesmith_thumb.jpg",
+    "uploaded_at": "2024-01-15T10:30:00Z"
+  },
+  "volunteering": [
+    {
+      "id": "990e8400-e29b-41d4-a716-446655440004",
+      "organization": "Code for Good",
+      "role": "Volunteer Developer",
+      "start_date": "2020-01-01",
+      "end_date": null,
+      "description": "Developed open-source tools for non-profits. Led workshops on web development."
+    }
+  ],
+  "positions": [
+    {
+      "id": "aa0e8400-e29b-41d4-a716-446655440005",
+      "title": "Board Member",
+      "organization": "Tech Community Foundation",
+      "start_date": "2022-01-01",
+      "end_date": null,
+      "description": "Served on the board of directors. Helped organize community events and mentorship programs."
+    }
+  ],
+  "career_breaks": [
+    {
+      "id": "bb0e8400-e29b-41d4-a716-446655440006",
+      "start_date": "2018-06-01",
+      "end_date": "2019-01-01",
+      "reason": "education",
+      "description": "Pursued advanced certification in cloud computing and took time to upskill."
+    }
+  ],
+  "licenses": [
+    {
+      "id": "cc0e8400-e29b-41d4-a716-446655440007",
+      "name": "Professional Engineer",
+      "issuer": "State Board of Engineering",
+      "license_number": "PE-12345",
+      "date": "2015-05-01",
+      "url": "https://example.com/license"
+    }
+  ],
+  "trainings": [
+    {
+      "id": "dd0e8400-e29b-41d4-a716-446655440008",
+      "title": "Advanced Kubernetes",
+      "provider": "CNCF",
+      "date": "2023-03-15",
+      "certificate_url": "https://example.com/cert",
+      "description": "Comprehensive Kubernetes administration course covering advanced topics."
+    },
+    {
+      "id": "ee0e8400-e29b-41d4-a716-446655440009",
+      "title": "Machine Learning Fundamentals",
+      "provider": "Coursera",
+      "date": "2022-08-20",
+      "certificate_url": null,
+      "description": "Introduction to machine learning algorithms and applications."
+    }
+  ],
+  "publications": [
+    {
+      "id": "ff0e8400-e29b-41d4-a716-446655440010",
+      "title": "Scalable Microservices Architecture",
+      "authors": [
+        "Jane Smith",
+        "John Doe"
+      ],
+      "venue": "IEEE Software",
+      "date": "2023-09-01",
+      "url": "https://example.com/paper",
+      "abstract": "This paper presents a novel approach to microservices architecture that improves scalability and maintainability."
+    }
+  ],
+  "patents": [
+    {
+      "id": "110e8400-e29b-41d4-a716-446655440011",
+      "title": "Distributed Cache System",
+      "patent_number": "US12345678",
+      "status": "granted",
+      "filing_date": "2020-01-15",
+      "grant_date": "2022-06-01",
+      "url": "https://patents.example.com/12345678"
+    }
+  ],
+  "honors_awards": [
+    {
+      "id": "220e8400-e29b-41d4-a716-446655440012",
+      "title": "Best Paper Award",
+      "issuer": "IEEE",
+      "date": "2023-09-01",
+      "description": "Recognized for outstanding research contribution in distributed systems."
+    }
+  ],
+  "test_scores": [
+    {
+      "id": "330e8400-e29b-41d4-a716-446655440013",
+      "test_name": "GRE",
+      "score": "330",
+      "max_score": 340,
+      "percentile": 95,
+      "date": "2010-06-15"
+    },
+    {
+      "id": "440e8400-e29b-41d4-a716-446655440014",
+      "test_name": "TOEFL",
+      "score": "118",
+      "max_score": 120,
+      "percentile": null,
+      "date": "2010-05-10"
+    }
+  ],
+  "languages": [
+    {
+      "language": "English",
+      "proficiency": "native"
+    },
+    {
+      "language": "Spanish",
+      "proficiency": "conversational",
+      "certification": "DELE B2"
+    },
+    {
+      "language": "French",
+      "proficiency": "basic"
+    }
+  ],
+  "organizations": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440015",
+      "name": "IEEE Computer Society",
+      "role": "Member",
+      "start_date": "2015-01-01",
+      "end_date": null,
+      "description": "Active member since 2015. Participated in conferences and workshops."
+    },
+    {
+      "id": "660e8400-e29b-41d4-a716-446655440016",
+      "name": "Python Software Foundation",
+      "role": "Contributor",
+      "start_date": "2018-01-01",
+      "end_date": null,
+      "description": "Regular contributor to open-source Python projects."
+    }
+  ],
+  "contact_info": {
+    "primary_phone": "+1-555-123-4567",
+    "secondary_phone": "+1-555-987-6543",
+    "secondary_email": "jane.personal@example.com",
+    "preferred_contact_method": "email",
+    "timezone": "America/Los_Angeles"
+  }
+}

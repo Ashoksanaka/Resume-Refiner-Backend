@@ -1,0 +1,932 @@
+openapi: 3.0.3
+info:
+  title: Resume AI API
+  description: |
+    API for the Job Application Resume Customization Platform.
+    Enables users to manage their professional profile, submit job descriptions,
+    and generate customized, ATS-friendly resumes using AI.
+  version: "1.0.0"
+
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Development server
+  - url: https://api.resume-ai.com/api/v1
+    description: Production server
+
+tags:
+  - name: Auth
+    description: User authentication and session management.
+  - name: Profiles
+    description: Management of the user's structured professional profile.
+  - name: Job Descriptions
+    description: Ingestion and management of job descriptions.
+  - name: Resumes
+    description: Endpoints for generating, checking status, and downloading resumes.
+  - name: Templates
+    description: Retrieval of available LaTeX resume templates.
+  - name: System
+    description: System health and status checks.
+
+paths:
+  /auth/signup:
+    post:
+      tags: [Auth]
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, confirm_password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  format: password
+                  minLength: 10
+                confirm_password:
+                  type: string
+                  format: password
+      responses:
+        '201':
+          description: Created. Verification email sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Verification email sent"
+        '400':
+          description: Validation failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthError'
+              example:
+                code: "INVALID_PAYLOAD"
+                errors:
+                  - field: "email"
+                    code: "INVALID_EMAIL_FORMAT"
+                  - field: "password"
+                    code: "PASSWORD_TOO_WEAK"
+                  - field: "confirm_password"
+                    code: "PASSWORD_MISMATCH"
+        '409':
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthError'
+              example:
+                code: "EMAIL_ALREADY_REGISTERED"
+                message: "Account already exists. Try logging in."
+
+  /auth/verify:
+    post:
+      tags: [Auth]
+      summary: Verify email with a token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+      responses:
+        '200':
+          description: User successfully verified.
+        '400':
+          description: Invalid or expired token.
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Login successful. Session cookie is set.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          description: Invalid credentials (generic by default, detailed when AUTH_DETAILED_ERRORS=true)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthError'
+              examples:
+                default:
+                  summary: Default secure response
+                  value:
+                    code: "INVALID_CREDENTIALS"
+                    message: "Invalid email or password."
+                detailed:
+                  summary: Detailed errors (when AUTH_DETAILED_ERRORS=true)
+                  value:
+                    code: "EMAIL_NOT_VERIFIED"
+                    message: "Email verification is required."
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Log out a user
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Logout successful.
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Get current authenticated user
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Authenticated user details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/AuthRequired'
+
+  /auth/password-policy:
+    get:
+      tags: [Auth]
+      summary: Get password policy requirements
+      responses:
+        '200':
+          description: Password policy details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  min_length:
+                    type: integer
+                    example: 10
+                  require_uppercase:
+                    type: boolean
+                    example: true
+                  require_number:
+                    type: boolean
+                    example: true
+                  require_symbol:
+                    type: boolean
+                    example: true
+
+  /auth/password-strength:
+    post:
+      tags: [Auth]
+      summary: Check password strength without storing it
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password:
+                  type: string
+                  format: password
+      responses:
+        '200':
+          description: Password strength evaluation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  score:
+                    type: integer
+                    minimum: 0
+                    maximum: 100
+                    example: 70
+                  valid:
+                    type: boolean
+                    example: true
+        '400':
+          $ref: '#/components/responses/InvalidPayload'
+
+  /profiles/me:
+    get:
+      tags: [Profiles]
+      summary: Get the current user's profile
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The user's full professional profile. contact_info is redacted for non-owners.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Profile'
+        '401':
+          $ref: '#/components/responses/AuthRequired'
+        '404':
+          description: Profile not found.
+    put:
+      tags: [Profiles]
+      summary: Create or replace the user's profile
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Profile'
+      responses:
+        '200':
+          description: Profile updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Profile'
+        '400':
+          $ref: '#/components/responses/InvalidPayload'
+        '401':
+          $ref: '#/components/responses/AuthRequired'
+    patch:
+      tags: [Profiles]
+      summary: Partially update the user's profile
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Profile'
+      responses:
+        '200':
+          description: Profile updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Profile'
+        '400':
+          $ref: '#/components/responses/InvalidPayload'
+        '401':
+          $ref: '#/components/responses/AuthRequired'
+
+  /profiles/me/picture:
+    post:
+      tags: [Profiles]
+      summary: Upload a profile picture
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Image file (JPEG/PNG, max 5MB)
+      responses:
+        '200':
+          description: Profile picture uploaded successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Profile'
+        '400':
+          $ref: '#/components/responses/InvalidPayload'
+        '401':
+          $ref: '#/components/responses/AuthRequired'
+    delete:
+      tags: [Profiles]
+      summary: Delete the user's profile picture
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Profile picture deleted successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Profile'
+        '401':
+          $ref: '#/components/responses/AuthRequired'
+
+  /jds:
+    post:
+      tags: [Job Descriptions]
+      summary: Ingest a new job description
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text:
+                  type: string
+                  description: The raw text of the job description.
+                  maxLength: 20000
+      responses:
+        '201':
+          description: Job description created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobDescription'
+        '400':
+          $ref: '#/components/responses/InvalidPayload'
+        '401':
+          $ref: '#/components/responses/AuthRequired'
+
+  /jds/{jd_id}:
+    parameters:
+      - name: jd_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Job Descriptions]
+      summary: Get a specific job description
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Job description details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobDescription'
+        '401':
+          $ref: '#/components/responses/AuthRequired'
+        '404':
+          description: Not Found.
+        '410':
+          $ref: '#/components/responses/TTLExpired'
+    delete:
+      tags: [Job Descriptions]
+      summary: Delete a job description
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Successfully deleted.
+        '401':
+          $ref: '#/components/responses/AuthRequired'
+        '404':
+          description: Not Found.
+
+  /resumes:
+    get:
+      tags: [Resumes]
+      summary: List all resume generation requests for the user
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      responses:
+        '200':
+          description: A list of resume generation requests.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ResumeGenerationRequest'
+        '401':
+          $ref: '#/components/responses/AuthRequired'
+    post:
+      tags: [Resumes]
+      summary: Trigger a new resume generation
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+            format: uuid
+          description: Prevents duplicate generation requests.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [job_description_id, template_id]
+              properties:
+                job_description_id:
+                  type: string
+                  format: uuid
+                template_id:
+                  type: string
+      responses:
+        '202':
+          description: Resume generation accepted and in progress.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResumeGenerationRequest'
+        '400':
+          $ref: '#/components/responses/InvalidPayload'
+        '401':
+          $ref: '#/components/responses/AuthRequired'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /resumes/{generation_id}/status:
+    get:
+      tags: [Resumes]
+      summary: Get the status of a resume generation task
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: generation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The current status of the generation task.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResumeGenerationRequest'
+        '401':
+          $ref: '#/components/responses/AuthRequired'
+        '404':
+          description: Not Found.
+        '410':
+          $ref: '#/components/responses/TTLExpired'
+
+  /resumes/{generation_id}/download:
+    get:
+      tags: [Resumes]
+      summary: Download the generated PDF resume
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: generation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The generated PDF file.
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/AuthRequired'
+        '404':
+          description: Not Found or generation not complete/failed.
+        '410':
+          $ref: '#/components/responses/TTLExpired'
+
+  /resumes/{generation_id}/source:
+    get:
+      tags: [Resumes]
+      summary: Get the AI-generated LaTeX source
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: generation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The generated LaTeX source code and modifications summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  latex_source:
+                    type: string
+                  modifications:
+                    type: array
+                    items:
+                      type: string
+                      description: "A human-readable summary of a change."
+        '401':
+          $ref: '#/components/responses/AuthRequired'
+        '404':
+          description: Not Found or generation not complete/failed.
+        '410':
+          $ref: '#/components/responses/TTLExpired'
+
+  /templates:
+    get:
+      tags: [Templates]
+      summary: List available resume templates
+      responses:
+        '200':
+          description: A list of resume templates.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Template'
+
+  /templates/{id}:
+    get:
+      tags: [Templates]
+      summary: Get a specific resume template
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Template details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '404':
+          description: Template not found.
+
+  /health:
+    get:
+      tags: [System]
+      summary: Check the health of the service
+      responses:
+        '200':
+          description: Service is healthy.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "ok"
+
+components:
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        email:
+          type: string
+          format: email
+        is_verified:
+          type: boolean
+          readOnly: true
+
+    Profile:
+      type: object
+      description: |
+        User's professional profile. Matches the schema defined in /backend/schemas/profile.json.
+        All fields are optional except personalInfo.full_name and personalInfo.email.
+        Sensitive fields (contact_info, profile_picture.url) are redacted for non-owners.
+      required:
+        - personalInfo
+      properties:
+        personalInfo:
+          type: object
+          required: [full_name, email]
+          properties:
+            full_name: { type: string, maxLength: 255 }
+            email: { type: string, format: email, maxLength: 255 }
+            phone_number: { type: string, maxLength: 50 }
+            location: { type: string, maxLength: 255 }
+            portfolio_url: { type: string, format: uri, maxLength: 512 }
+        summary: { type: string, maxLength: 2500 }
+        experience:
+          type: array
+          maxItems: 25
+          items: { type: object }
+        education:
+          type: array
+          maxItems: 10
+          items: { type: object }
+        skills:
+          type: array
+          maxItems: 50
+          items: { type: string, maxLength: 100 }
+        certifications:
+          type: array
+          maxItems: 20
+          items: { type: object }
+        projects:
+          type: array
+          maxItems: 50
+          items: { type: object }
+        achievements:
+          type: array
+          maxItems: 50
+          items: { type: object }
+        areas_of_interest:
+          type: array
+          maxItems: 50
+          items: { type: string, maxLength: 100 }
+        hobbies:
+          type: array
+          maxItems: 50
+          items: { type: string, maxLength: 100 }
+        address:
+          type: object
+          properties:
+            street: { type: string, maxLength: 250 }
+            city: { type: string, maxLength: 100 }
+            region: { type: string, maxLength: 100 }
+            country: { type: string, maxLength: 100 }
+            postal_code: { type: string, maxLength: 50 }
+            geolocation:
+              type: object
+              properties:
+                lat: { type: number }
+                lon: { type: number }
+        social_urls:
+          type: object
+          properties:
+            linkedin: { type: string, format: uri }
+            github: { type: string, format: uri }
+            twitter: { type: string, format: uri }
+            portfolio: { type: string, format: uri }
+            website: { type: string, format: uri }
+            other:
+              type: array
+              items:
+                type: object
+                properties:
+                  label: { type: string }
+                  url: { type: string, format: uri }
+        profile_picture:
+          type: object
+          properties:
+            url: { type: string }
+            thumbnail_url: { type: string }
+            uploaded_at: { type: string, format: date-time }
+        volunteering:
+          type: array
+          maxItems: 50
+          items: { type: object }
+        positions:
+          type: array
+          maxItems: 50
+          items: { type: object }
+        career_breaks:
+          type: array
+          maxItems: 20
+          items: { type: object }
+        licenses:
+          type: array
+          maxItems: 50
+          items: { type: object }
+        trainings:
+          type: array
+          maxItems: 50
+          items: { type: object }
+        publications:
+          type: array
+          maxItems: 50
+          items: { type: object }
+        patents:
+          type: array
+          maxItems: 50
+          items: { type: object }
+        honors_awards:
+          type: array
+          maxItems: 50
+          items: { type: object }
+        test_scores:
+          type: array
+          maxItems: 50
+          items: { type: object }
+        languages:
+          type: array
+          maxItems: 50
+          items: { type: object }
+        organizations:
+          type: array
+          maxItems: 50
+          items: { type: object }
+        contact_info:
+          type: object
+          description: Sensitive field - redacted for non-owners
+          properties:
+            primary_phone: { type: string, maxLength: 50 }
+            secondary_phone: { type: string, maxLength: 50 }
+            secondary_email: { type: string, format: email, maxLength: 255 }
+            preferred_contact_method: { type: string, enum: [email, phone, none] }
+            timezone: { type: string, maxLength: 100 }
+
+    JobDescription:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        text:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        expires_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    Template:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        name:
+          type: string
+        description:
+          type: string
+        thumbnail_url:
+          type: string
+          format: uri
+
+    ResumeGenerationRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        status:
+          type: string
+          enum: [pending, processing, success, failed]
+          readOnly: true
+        failure_reason:
+          type: string
+          nullable: true
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        expires_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    Error:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code:
+          type: string
+          description: A machine-readable error code.
+        message:
+          type: string
+          description: A human-readable error message.
+        details:
+          type: object
+          additionalProperties: true
+          nullable: true
+
+    AuthError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: A machine-readable error code.
+          enum:
+            - INVALID_PAYLOAD
+            - INVALID_CREDENTIALS
+            - EMAIL_ALREADY_REGISTERED
+            - EMAIL_NOT_VERIFIED
+            - ACCOUNT_LOCKED
+            - INVALID_PASSWORD
+        message:
+          type: string
+          description: A human-readable error message.
+        errors:
+          type: array
+          description: Field-level validation errors (for 400 responses)
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+                description: The field name with the error
+              code:
+                type: string
+                description: Field-specific error code
+                enum:
+                  - INVALID_EMAIL_FORMAT
+                  - PASSWORD_TOO_WEAK
+                  - PASSWORD_MISMATCH
+
+  responses:
+    AuthRequired:
+      description: Authentication is required and has failed or has not yet been provided.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: "AUTH_REQUIRED"
+            message: "Authentication credentials were not provided."
+
+    InvalidPayload:
+      description: The request payload is invalid or missing required fields.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: "INVALID_PAYLOAD"
+            message: "Invalid input."
+            details: { "email": ["Enter a valid email address."] }
+
+    TTLExpired:
+      description: The requested resource has expired and is no longer available.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: "TTL_EXPIRED"
+            message: "This resource has expired and is no longer available."
+
+    RateLimited:
+      description: Too many requests.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: "RATE_LIMITED"
+            message: "Request was throttled. Try again later."
+
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: sessionid
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

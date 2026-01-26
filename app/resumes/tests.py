@@ -1,0 +1,982 @@
+"""
+Integration tests for resume-related endpoints.
+
+Tests:
+- Job description CRUD
+- Resume generation trigger and status
+- TTL expiry behavior
+- Hallucination detection
+- LaTeX compilation errors
+"""
+
+import pytest
+import uuid
+from datetime import timedelta
+from django.utils import timezone
+from rest_framework import status
+from rest_framework.test import APIClient
+from app.authentication.models import User
+from app.profiles.models import Profile
+from app.resumes.models import JobDescription, ResumeGenerationRequest
+from app.common.models import Template
+from app.resumes.services import HallucinationDetector
+
+
+@pytest.fixture
+def api_client():
+    return APIClient()
+
+
+@pytest.fixture
+def verified_user(db):
+    """Create a verified user with a profile."""
+    user = User.objects.create_user(
+        email='test@example.com',
+        password='testpass123'
+    )
+    user.is_verified = True
+    user.save()
+    return user
+
+
+@pytest.fixture
+def user_with_profile(verified_user):
+    """Create a verified user with a complete profile."""
+    profile_data = {
+        'personalInfo': {
+            'full_name': 'Jane Doe',
+            'email': 'jane.doe@example.com',
+            'phone_number': '+1-555-123-4567',
+            'location': 'New York, USA'
+        },
+        'summary': 'Experienced software engineer.',
+        'experience': [
+            {
+                'company': 'TechCorp',
+                'title': 'Senior Engineer',
+                'start_date': '2021-01-15',
+                'end_date': None,
+                'description': 'Led development of key features.'
+            }
+        ],
+        'education': [
+            {
+                'institution': 'State University',
+                'degree': 'B.S. Computer Science',
+                'start_date': '2012-08-01',
+                'end_date': '2016-05-20'
+            }
+        ],
+        'skills': ['Python', 'Django', 'React'],
+        'certifications': []
+    }
+    Profile.objects.create(user=verified_user, data=profile_data)
+    return verified_user
+
+
+@pytest.fixture
+def template(db):
+    """Create an active template with the new model structure."""
+    return Template.objects.create(
+        id='altacv',
+        name='Professional Modern',
+        description='A clean, modern resume template.',
+        author='Resume AI Platform',
+        version='1.0.0',
+        default_filename='resume',
+        has_preview=True,
+        is_active=True
+    )
+
+
+@pytest.fixture
+def job_description(user_with_profile):
+    """Create a job description."""
+    return JobDescription.objects.create(
+        user=user_with_profile,
+        text='We are looking for a Senior Software Engineer with Python and Django experience.'
+    )
+
+
+# =============================================================================
+# Job Description Tests
+# =============================================================================
+
+@pytest.mark.django_db
+class TestJobDescriptionCreate:
+    """Tests for POST /jds"""
+    
+    def test_create_jd_success(self, api_client, user_with_profile):
+        """Test successful job description creation."""
+        api_client.force_authenticate(user=user_with_profile)
+        
+        response = api_client.post(
+            '/api/v1/jds',
+            {'text': 'Looking for a Python developer with 5+ years experience.'},
+            format='json'
+        )
+        
+        assert response.status_code == status.HTTP_201_CREATED
+        assert 'id' in response.data
+        assert 'expires_at' in response.data
+        assert response.data['text'] == 'Looking for a Python developer with 5+ years experience.'
+    
+    def test_create_jd_sets_ttl(self, api_client, user_with_profile):
+        """Test that JD has correct TTL set."""
+        api_client.force_authenticate(user=user_with_profile)
+        
+        response = api_client.post(
+            '/api/v1/jds',
+            {'text': 'Test job description'},
+            format='json'
+        )
+        
+        assert response.status_code == status.HTTP_201_CREATED
+        
+        jd = JobDescription.objects.get(id=response.data['id'])
+        # Should expire in approximately 24 hours
+        expected_expiry = timezone.now() + timedelta(hours=24)
+        assert abs((jd.expires_at - expected_expiry).total_seconds()) < 60
+    
+    def test_create_jd_empty_text(self, api_client, user_with_profile):
+        """Test creating JD with empty text fails."""
+        api_client.force_authenticate(user=user_with_profile)
+        
+        response = api_client.post(
+            '/api/v1/jds',
+            {'text': '   '},  # Whitespace only
+            format='json'
+        )
+        
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+class TestJobDescriptionGet:
+    """Tests for GET /jds/{id}"""
+    
+    def test_get_jd_success(self, api_client, user_with_profile, job_description):
+        """Test getting a job description."""
+        api_client.force_authenticate(user=user_with_profile)
+        
+        response = api_client.get(f'/api/v1/jds/{job_description.id}')
+        
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['id'] == str(job_description.id)
+    
+    def test_get_jd_not_found(self, api_client, user_with_profile):
+        """Test getting non-existent JD returns 404."""
+        api_client.force_authenticate(user=user_with_profile)
+        
+        response = api_client.get(f'/api/v1/jds/{uuid.uuid4()}')
+        
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+    
+    def test_get_expired_jd_returns_410(self, api_client, user_with_profile, job_description):
+        """Test getting expired JD returns 410 Gone (TTL_EXPIRED)."""
+        # Expire the JD
+        job_description.expires_at = timezone.now() - timedelta(hours=1)
+        job_description.save()
+        
+        api_client.force_authenticate(user=user_with_profile)
+        response = api_client.get(f'/api/v1/jds/{job_description.id}')
+        
+        assert response.status_code == status.HTTP_410_GONE
+        assert response.data['error_code'] == 'TTL_EXPIRED'
+
+
+@pytest.mark.django_db
+class TestJobDescriptionDelete:
+    """Tests for DELETE /jds/{id}"""
+    
+    def test_delete_jd_success(self, api_client, user_with_profile, job_description):
+        """Test deleting a job description."""
+        api_client.force_authenticate(user=user_with_profile)
+        
+        response = api_client.delete(f'/api/v1/jds/{job_description.id}')
+        
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+        assert not JobDescription.objects.filter(id=job_description.id).exists()
+
+
+# =============================================================================
+# Resume Generation Tests
+# =============================================================================
+
+@pytest.mark.django_db
+class TestResumeGenerationCreate:
+    """Tests for POST /resumes"""
+    
+    def test_create_generation_success(self, api_client, user_with_profile, job_description, template):
+        """Test triggering resume generation."""
+        api_client.force_authenticate(user=user_with_profile)
+        
+        response = api_client.post(
+            '/api/v1/resumes',
+            {
+                'job_description_id': str(job_description.id),
+                'template_id': template.id
+            },
+            format='json'
+        )
+        
+        assert response.status_code == status.HTTP_202_ACCEPTED
+        assert response.data['status'] == 'pending'
+        assert 'id' in response.data
+        assert 'expires_at' in response.data
+    
+    def test_create_generation_invalid_jd(self, api_client, user_with_profile, template):
+        """Test generation with non-existent JD fails."""
+        api_client.force_authenticate(user=user_with_profile)
+        
+        response = api_client.post(
+            '/api/v1/resumes',
+            {
+                'job_description_id': str(uuid.uuid4()),
+                'template_id': template.id
+            },
+            format='json'
+        )
+        
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+    
+    def test_create_generation_invalid_template(self, api_client, user_with_profile, job_description):
+        """Test generation with non-existent template fails."""
+        api_client.force_authenticate(user=user_with_profile)
+        
+        response = api_client.post(
+            '/api/v1/resumes',
+            {
+                'job_description_id': str(job_description.id),
+                'template_id': 'nonexistent-template'
+            },
+            format='json'
+        )
+        
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+    
+    def test_idempotency_key(self, api_client, user_with_profile, job_description, template):
+        """Test idempotency key prevents duplicate requests."""
+        api_client.force_authenticate(user=user_with_profile)
+        idempotency_key = str(uuid.uuid4())
+        
+        # First request
+        response1 = api_client.post(
+            '/api/v1/resumes',
+            {
+                'job_description_id': str(job_description.id),
+                'template_id': template.id
+            },
+            format='json',
+            HTTP_IDEMPOTENCY_KEY=idempotency_key
+        )
+        
+        # Second request with same key
+        response2 = api_client.post(
+            '/api/v1/resumes',
+            {
+                'job_description_id': str(job_description.id),
+                'template_id': template.id
+            },
+            format='json',
+            HTTP_IDEMPOTENCY_KEY=idempotency_key
+        )
+        
+        assert response1.status_code == status.HTTP_202_ACCEPTED
+        assert response2.status_code == status.HTTP_202_ACCEPTED
+        # Should return the same generation request
+        assert response1.data['id'] == response2.data['id']
+
+
+@pytest.mark.django_db
+class TestResumeGenerationStatus:
+    """Tests for GET /resumes/{id}/status"""
+    
+    def test_get_status_success(self, api_client, user_with_profile, job_description, template):
+        """Test getting generation status."""
+        request = ResumeGenerationRequest.objects.create(
+            user=user_with_profile,
+            job_description=job_description,
+            template_id=template.id,
+            profile_snapshot=user_with_profile.profile.data
+        )
+        
+        api_client.force_authenticate(user=user_with_profile)
+        response = api_client.get(f'/api/v1/resumes/{request.id}/status')
+        
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['status'] == 'pending'
+    
+    def test_get_expired_status_returns_410(self, api_client, user_with_profile, job_description, template):
+        """Test getting expired generation status returns 410."""
+        request = ResumeGenerationRequest.objects.create(
+            user=user_with_profile,
+            job_description=job_description,
+            template_id=template.id,
+            profile_snapshot=user_with_profile.profile.data,
+            expires_at=timezone.now() - timedelta(hours=1)
+        )
+        
+        api_client.force_authenticate(user=user_with_profile)
+        response = api_client.get(f'/api/v1/resumes/{request.id}/status')
+        
+        assert response.status_code == status.HTTP_410_GONE
+        assert response.data['error_code'] == 'TTL_EXPIRED'
+
+
+# =============================================================================
+# Hallucination Detection Tests
+# =============================================================================
+
+@pytest.mark.django_db
+class TestHallucinationDetection:
+    """Tests for hallucination detection algorithm.
+    
+    CRITICAL: Hallucination detection is a safety feature.
+    These tests ensure that:
+    1. Valid content passes
+    2. Hallucinated content is ALWAYS rejected
+    3. Edge cases are handled correctly
+    """
+    
+    def test_no_hallucination_detected(self):
+        """Test that valid LaTeX passes hallucination check."""
+        profile_data = {
+            'personalInfo': {
+                'full_name': 'Jane Doe',
+                'email': 'jane@example.com',
+                'location': 'New York, USA'
+            },
+            'experience': [
+                {'company': 'TechCorp', 'title': 'Engineer'},
+                {'company': 'StartupXYZ', 'title': 'Developer'}
+            ],
+            'education': [
+                {'institution': 'State University', 'degree': 'BS CS'}
+            ],
+            'skills': ['Python', 'Django'],
+            'certifications': []
+        }
+        
+        latex_source = r"""
+        \textbf{TechCorp}
+        Senior Engineer
+        
+        \textbf{State University}
+        Bachelor of Science
+        """
+        
+        is_hallucinated, entity = HallucinationDetector.detect_hallucination(
+            profile_data, latex_source
+        )
+        
+        assert not is_hallucinated
+        assert entity is None
+    
+    def test_hallucination_detected_company(self):
+        """Test that invented company name is detected."""
+        profile_data = {
+            'experience': [
+                {'company': 'TechCorp', 'title': 'Engineer'}
+            ],
+            'education': [],
+            'skills': [],
+            'certifications': []
+        }
+        
+        latex_source = r"""
+        \textbf{TechCorp}
+        Engineer
+        
+        \textbf{InventedCompany Inc}
+        Another Role
+        """
+        
+        is_hallucinated, entity = HallucinationDetector.detect_hallucination(
+            profile_data, latex_source
+        )
+        
+        # Should detect the invented company
+        assert is_hallucinated
+        assert entity is not None
+    
+    def test_hallucination_detected_university(self):
+        """Test that invented university is detected."""
+        profile_data = {
+            'experience': [],
+            'education': [
+                {'institution': 'State University', 'degree': 'BS'}
+            ],
+            'skills': [],
+            'certifications': []
+        }
+        
+        latex_source = r"""
+        \textbf{State University}
+        
+        \institution{University of Mars}
+        """
+        
+        is_hallucinated, entity = HallucinationDetector.detect_hallucination(
+            profile_data, latex_source
+        )
+        
+        assert is_hallucinated
+    
+    def test_company_suffix_variations_allowed(self):
+        """Test that company name suffix variations (Inc, LLC) are allowed."""
+        profile_data = {
+            'experience': [
+                {'company': 'TechCorp', 'title': 'Engineer'}
+            ],
+            'education': [],
+            'skills': [],
+            'certifications': []
+        }
+        
+        # AI might add "Inc" suffix - this should be allowed
+        latex_source = r"""
+        \textbf{TechCorp Inc}
+        Engineer
+        """
+        
+        is_hallucinated, entity = HallucinationDetector.detect_hallucination(
+            profile_data, latex_source
+        )
+        
+        assert not is_hallucinated
+    
+    def test_partial_match_allowed(self):
+        """Test that partial matches of profile entities are allowed."""
+        profile_data = {
+            'experience': [
+                {'company': 'Acme Corporation International', 'title': 'Engineer'}
+            ],
+            'education': [],
+            'skills': [],
+            'certifications': []
+        }
+        
+        # AI might abbreviate - using "Acme Corporation" should be allowed
+        latex_source = r"""
+        \textbf{Acme Corporation}
+        Engineer
+        """
+        
+        is_hallucinated, entity = HallucinationDetector.detect_hallucination(
+            profile_data, latex_source
+        )
+        
+        assert not is_hallucinated
+    
+    def test_skills_from_profile_allowed(self):
+        """Test that skills from profile are allowed in output."""
+        profile_data = {
+            'experience': [],
+            'education': [],
+            'skills': ['Python', 'Django', 'React', 'TypeScript'],
+            'certifications': []
+        }
+        
+        latex_source = r"""
+        \textbf{Skills}
+        Python, Django, React, TypeScript
+        """
+        
+        is_hallucinated, entity = HallucinationDetector.detect_hallucination(
+            profile_data, latex_source
+        )
+        
+        assert not is_hallucinated
+    
+    def test_fake_certification_detected(self):
+        """Test that invented certifications are detected."""
+        profile_data = {
+            'experience': [],
+            'education': [],
+            'skills': [],
+            'certifications': [
+                {'name': 'AWS Solutions Architect', 'issuing_organization': 'Amazon'}
+            ]
+        }
+        
+        latex_source = r"""
+        \textbf{AWS Solutions Architect} - Amazon
+        
+        \textbf{Google Cloud Expert} - Google
+        """
+        
+        is_hallucinated, entity = HallucinationDetector.detect_hallucination(
+            profile_data, latex_source
+        )
+        
+        # Should detect the invented Google certification
+        assert is_hallucinated
+    
+    def test_empty_profile_rejects_all_entities(self):
+        """Test that an empty profile rejects any entity mentions."""
+        profile_data = {
+            'experience': [],
+            'education': [],
+            'skills': [],
+            'certifications': []
+        }
+        
+        latex_source = r"""
+        \textbf{Google}
+        Software Engineer
+        """
+        
+        is_hallucinated, entity = HallucinationDetector.detect_hallucination(
+            profile_data, latex_source
+        )
+        
+        assert is_hallucinated
+    
+    def test_common_section_headers_ignored(self):
+        """Test that common section headers are not flagged as hallucinations."""
+        profile_data = {
+            'experience': [
+                {'company': 'TechCorp', 'title': 'Engineer'}
+            ],
+            'education': [],
+            'skills': [],
+            'certifications': []
+        }
+        
+        latex_source = r"""
+        \section*{Professional Experience}
+        \textbf{TechCorp}
+        
+        \section*{Education}
+        \section*{Skills}
+        """
+        
+        is_hallucinated, entity = HallucinationDetector.detect_hallucination(
+            profile_data, latex_source
+        )
+        
+        assert not is_hallucinated
+
+
+# =============================================================================
+# LaTeX Validation Tests
+# =============================================================================
+
+@pytest.mark.django_db
+class TestLatexValidation:
+    """Tests for LaTeX output validation.
+    
+    CRITICAL: LaTeX validation ensures:
+    1. Output is well-formed LaTeX
+    2. Output will compile successfully
+    3. Invalid output is REJECTED, not fixed
+    """
+    
+    def test_valid_latex_passes(self, user_with_profile, job_description, template):
+        """Test that valid LaTeX passes validation."""
+        from app.resumes.services import ResumeGenerationService
+        
+        request = ResumeGenerationRequest.objects.create(
+            user=user_with_profile,
+            job_description=job_description,
+            template_id=template.id,
+            profile_snapshot=user_with_profile.profile.data
+        )
+        
+        valid_latex = r"""\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\begin{document}
+\textbf{Jane Doe}
+\textbf{TechCorp}
+\end{document}"""
+        
+        # Should not raise
+        ResumeGenerationService.validate_ai_output(
+            request, valid_latex, ['Generated resume']
+        )
+    
+    def test_missing_documentclass_rejected(self, user_with_profile, job_description, template):
+        """Test that LaTeX without \\documentclass is rejected."""
+        from app.resumes.services import ResumeGenerationService
+        from app.common.exceptions import ModelOutputInvalidException
+        
+        request = ResumeGenerationRequest.objects.create(
+            user=user_with_profile,
+            job_description=job_description,
+            template_id=template.id,
+            profile_snapshot=user_with_profile.profile.data
+        )
+        
+        invalid_latex = r"""\begin{document}
+\textbf{Jane Doe}
+\end{document}"""
+        
+        with pytest.raises(ModelOutputInvalidException) as exc_info:
+            ResumeGenerationService.validate_ai_output(
+                request, invalid_latex, []
+            )
+        
+        assert 'documentclass' in str(exc_info.value).lower()
+    
+    def test_missing_begin_document_rejected(self, user_with_profile, job_description, template):
+        """Test that LaTeX without \\begin{document} is rejected."""
+        from app.resumes.services import ResumeGenerationService
+        from app.common.exceptions import ModelOutputInvalidException
+        
+        request = ResumeGenerationRequest.objects.create(
+            user=user_with_profile,
+            job_description=job_description,
+            template_id=template.id,
+            profile_snapshot=user_with_profile.profile.data
+        )
+        
+        invalid_latex = r"""\documentclass{article}
+\textbf{Jane Doe}
+\end{document}"""
+        
+        with pytest.raises(ModelOutputInvalidException) as exc_info:
+            ResumeGenerationService.validate_ai_output(
+                request, invalid_latex, []
+            )
+        
+        assert 'begin{document}' in str(exc_info.value).lower()
+    
+    def test_missing_end_document_rejected(self, user_with_profile, job_description, template):
+        """Test that LaTeX without \\end{document} is rejected."""
+        from app.resumes.services import ResumeGenerationService
+        from app.common.exceptions import ModelOutputInvalidException
+        
+        request = ResumeGenerationRequest.objects.create(
+            user=user_with_profile,
+            job_description=job_description,
+            template_id=template.id,
+            profile_snapshot=user_with_profile.profile.data
+        )
+        
+        invalid_latex = r"""\documentclass{article}
+\begin{document}
+\textbf{Jane Doe}"""
+        
+        with pytest.raises(ModelOutputInvalidException) as exc_info:
+            ResumeGenerationService.validate_ai_output(
+                request, invalid_latex, []
+            )
+        
+        assert 'end{document}' in str(exc_info.value).lower()
+    
+    def test_empty_output_rejected(self, user_with_profile, job_description, template):
+        """Test that empty output is rejected."""
+        from app.resumes.services import ResumeGenerationService
+        from app.common.exceptions import ModelOutputInvalidException
+        
+        request = ResumeGenerationRequest.objects.create(
+            user=user_with_profile,
+            job_description=job_description,
+            template_id=template.id,
+            profile_snapshot=user_with_profile.profile.data
+        )
+        
+        with pytest.raises(ModelOutputInvalidException):
+            ResumeGenerationService.validate_ai_output(request, '', [])
+        
+        with pytest.raises(ModelOutputInvalidException):
+            ResumeGenerationService.validate_ai_output(request, '   ', [])
+    
+    def test_hallucinated_content_rejected(self, user_with_profile, job_description, template):
+        """Test that valid LaTeX with hallucinated content is rejected."""
+        from app.resumes.services import ResumeGenerationService
+        from app.common.exceptions import ModelOutputInvalidException
+        
+        request = ResumeGenerationRequest.objects.create(
+            user=user_with_profile,
+            job_description=job_description,
+            template_id=template.id,
+            profile_snapshot=user_with_profile.profile.data
+        )
+        
+        # Valid structure but contains hallucinated company
+        hallucinated_latex = r"""\documentclass{article}
+\begin{document}
+\textbf{Jane Doe}
+\textbf{TechCorp}  % Valid - in profile
+\textbf{FakeCompany Corp}  % Invalid - hallucinated
+\end{document}"""
+        
+        with pytest.raises(ModelOutputInvalidException) as exc_info:
+            ResumeGenerationService.validate_ai_output(
+                request, hallucinated_latex, []
+            )
+        
+        assert 'hallucinated' in str(exc_info.value).lower()
+
+
+# =============================================================================
+# Error Code Tests
+# =============================================================================
+
+@pytest.mark.django_db
+class TestErrorCodes:
+    """Tests for correct error code assignment."""
+    
+    def test_model_output_invalid_code(self, user_with_profile, job_description, template):
+        """Test that MODEL_OUTPUT_INVALID code is returned for hallucinations."""
+        from app.resumes.services import ResumeGenerationService
+        from app.common.exceptions import ModelOutputInvalidException, ErrorCode
+        
+        request = ResumeGenerationRequest.objects.create(
+            user=user_with_profile,
+            job_description=job_description,
+            template_id=template.id,
+            profile_snapshot=user_with_profile.profile.data
+        )
+        
+        hallucinated_latex = r"""\documentclass{article}
+\begin{document}
+\textbf{InventedUniversity}
+\end{document}"""
+        
+        try:
+            ResumeGenerationService.validate_ai_output(
+                request, hallucinated_latex, []
+            )
+            assert False, "Should have raised ModelOutputInvalidException"
+        except ModelOutputInvalidException as e:
+            assert e.error_code == ErrorCode.MODEL_OUTPUT_INVALID
+    
+    def test_failed_generation_stores_error_code(self, user_with_profile, job_description, template):
+        """Test that failed generations store correct error code."""
+        request = ResumeGenerationRequest.objects.create(
+            user=user_with_profile,
+            job_description=job_description,
+            template_id=template.id,
+            profile_snapshot=user_with_profile.profile.data
+        )
+        
+        request.mark_failed('MODEL_OUTPUT_INVALID', 'Test error details')
+        
+        assert request.status == 'failed'
+        assert request.failure_reason_code == 'MODEL_OUTPUT_INVALID'
+        assert request.failure_details == 'Test error details'
+
+
+# =============================================================================
+# Status Transition Tests
+# =============================================================================
+
+@pytest.mark.django_db
+class TestStatusTransitions:
+    """Tests for generation request status transitions."""
+    
+    def test_pending_to_processing(self, user_with_profile, job_description, template):
+        """Test transition from pending to processing."""
+        request = ResumeGenerationRequest.objects.create(
+            user=user_with_profile,
+            job_description=job_description,
+            template_id=template.id,
+            profile_snapshot=user_with_profile.profile.data
+        )
+        
+        assert request.status == 'pending'
+        assert request.started_at is None
+        
+        request.mark_processing()
+        
+        assert request.status == 'processing'
+        assert request.started_at is not None
+    
+    def test_processing_to_success(self, user_with_profile, job_description, template):
+        """Test transition from processing to success."""
+        request = ResumeGenerationRequest.objects.create(
+            user=user_with_profile,
+            job_description=job_description,
+            template_id=template.id,
+            profile_snapshot=user_with_profile.profile.data
+        )
+        
+        request.mark_processing()
+        request.mark_success(
+            latex_source='\\documentclass{article}...',
+            pdf_path='/tmp/test.pdf',
+            modifications=['Generated resume']
+        )
+        
+        assert request.status == 'success'
+        assert request.generated_latex is not None
+        assert request.generated_pdf_path is not None
+        assert request.completed_at is not None
+    
+    def test_processing_to_failed(self, user_with_profile, job_description, template):
+        """Test transition from processing to failed."""
+        request = ResumeGenerationRequest.objects.create(
+            user=user_with_profile,
+            job_description=job_description,
+            template_id=template.id,
+            profile_snapshot=user_with_profile.profile.data
+        )
+        
+        request.mark_processing()
+        request.mark_failed('MODEL_OUTPUT_INVALID', 'Hallucination detected')
+        
+        assert request.status == 'failed'
+        assert request.failure_reason_code == 'MODEL_OUTPUT_INVALID'
+        assert request.completed_at is not None
+
+
+# =============================================================================
+# Template Tests
+# =============================================================================
+
+@pytest.mark.django_db
+class TestTemplates:
+    """Tests for template endpoints."""
+    
+    def test_list_templates(self, api_client, template):
+        """Test listing templates (public endpoint)."""
+        response = api_client.get('/api/v1/templates')
+        
+        assert response.status_code == status.HTTP_200_OK
+        assert len(response.data) == 1
+        assert response.data[0]['id'] == template.id
+    
+    def test_get_template(self, api_client, template):
+        """Test getting a specific template."""
+        response = api_client.get(f'/api/v1/templates/{template.id}')
+        
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['name'] == 'Professional Modern'
+    
+    def test_get_nonexistent_template(self, api_client):
+        """Test getting non-existent template returns 404."""
+        response = api_client.get('/api/v1/templates/nonexistent')
+        
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+    
+    def test_template_includes_version(self, api_client, template):
+        """Test that template response includes version for cache invalidation."""
+        response = api_client.get(f'/api/v1/templates/{template.id}')
+        
+        assert response.status_code == status.HTTP_200_OK
+        assert 'version' in response.data
+        assert response.data['version'] == '1.0.0'
+    
+    def test_template_includes_preview_urls(self, api_client, template):
+        """Test that template response includes preview URLs when available."""
+        response = api_client.get(f'/api/v1/templates/{template.id}')
+        
+        assert response.status_code == status.HTTP_200_OK
+        assert 'has_preview' in response.data
+        assert 'preview_png_url' in response.data
+        assert 'preview_pdf_url' in response.data
+        
+        # Template has has_preview=True, so URLs should be set
+        assert response.data['has_preview'] is True
+        assert response.data['preview_png_url'] is not None
+        assert f'/templates/{template.id}/preview.png' in response.data['preview_png_url']
+    
+    def test_template_without_preview_has_null_urls(self, api_client, db):
+        """Test that templates without previews have null URLs."""
+        no_preview_template = Template.objects.create(
+            id='no-preview',
+            name='No Preview Template',
+            description='A template without preview.',
+            author='Test',
+            version='1.0.0',
+            has_preview=False,
+            is_active=True
+        )
+        
+        response = api_client.get(f'/api/v1/templates/{no_preview_template.id}')
+        
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['has_preview'] is False
+        assert response.data['preview_png_url'] is None
+        assert response.data['preview_pdf_url'] is None
+    
+    def test_inactive_template_not_listed(self, api_client, template, db):
+        """Test that inactive templates are not listed."""
+        inactive_template = Template.objects.create(
+            id='inactive',
+            name='Inactive Template',
+            description='An inactive template.',
+            author='Test',
+            version='1.0.0',
+            is_active=False
+        )
+        
+        response = api_client.get('/api/v1/templates')
+        
+        assert response.status_code == status.HTTP_200_OK
+        template_ids = [t['id'] for t in response.data]
+        assert 'inactive' not in template_ids
+        assert template.id in template_ids
+    
+    def test_template_author_field(self, api_client, template):
+        """Test that template includes author field."""
+        response = api_client.get(f'/api/v1/templates/{template.id}')
+        
+        assert response.status_code == status.HTTP_200_OK
+        assert 'author' in response.data
+        assert response.data['author'] == 'Resume AI Platform'
+
+
+@pytest.mark.django_db
+class TestTemplateMetadataValidation:
+    """Tests for template metadata validation.
+    
+    These tests ensure that templates conform to the required structure.
+    """
+    
+    def test_template_id_format(self, db):
+        """Test that template IDs must be lowercase alphanumeric with hyphens."""
+        # Valid ID
+        template = Template.objects.create(
+            id='valid-template-id',
+            name='Valid Template',
+            description='A valid template.',
+            author='Test',
+            version='1.0.0',
+            is_active=True
+        )
+        assert template.id == 'valid-template-id'
+    
+    def test_template_version_format(self, db):
+        """Test that template versions follow semantic versioning."""
+        template = Template.objects.create(
+            id='test-version',
+            name='Test Version',
+            description='Testing version format.',
+            author='Test',
+            version='2.1.3',
+            is_active=True
+        )
+        assert template.version == '2.1.3'
+    
+    def test_template_str_includes_version(self, db):
+        """Test that template string representation includes version."""
+        template = Template.objects.create(
+            id='str-test',
+            name='String Test',
+            description='Testing string representation.',
+            author='Test',
+            version='1.2.0',
+            is_active=True
+        )
+        assert '1.2.0' in str(template)
+        assert 'String Test' in str(template)
+
+
+# =============================================================================
+# Health Check Tests
+# =============================================================================
+
+@pytest.mark.django_db
+class TestHealthCheck:
+    """Tests for GET /health"""
+    
+    def test_health_check(self, api_client):
+        """Test health check endpoint."""
+        response = api_client.get('/api/v1/health')
+        
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['status'] == 'ok'

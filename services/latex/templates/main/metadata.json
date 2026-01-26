@@ -1,0 +1,12 @@
+{
+  "id": "main",
+  "name": "Main Resume Template",
+  "description": "Standard resume template for professional resumes",
+  "author": "Resume AI Platform",
+  "version": "1.0.0",
+  "placeholders": [],
+  "default_filename": "resume",
+  "required_packages": [],
+  "compile_engine": "pdflatex",
+  "compile_runs": 2
+}

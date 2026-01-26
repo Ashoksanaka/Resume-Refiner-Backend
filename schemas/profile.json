@@ -1,0 +1,1046 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "UserProfile",
+  "description": "A structured professional profile, similar to a LinkedIn profile.",
+  "type": "object",
+  "properties": {
+    "personalInfo": {
+      "type": "object",
+      "required": ["full_name", "email"],
+      "properties": {
+        "full_name": {
+          "type": "string",
+          "description": "User's full name.",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "User's primary email address.",
+          "maxLength": 255
+        },
+        "phone_number": {
+          "type": "string",
+          "description": "User's contact phone number.",
+          "maxLength": 50
+        },
+        "location": {
+          "type": "string",
+          "description": "City and country, e.g., 'San Francisco, USA'.",
+          "maxLength": 255
+        },
+        "portfolio_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "URL to a personal website or portfolio.",
+          "maxLength": 512
+        }
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "string",
+      "description": "A professional summary or 'About Me' section.",
+      "minLength": 10,
+      "maxLength": 2500
+    },
+    "experience": {
+      "type": "array",
+      "description": "Work experience history.",
+      "minItems": 0,
+      "maxItems": 25,
+      "items": {
+        "type": "object",
+        "required": ["company", "title", "start_date"],
+        "properties": {
+          "company": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "start_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "end_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "education": {
+      "type": "array",
+      "description": "Educational background.",
+      "minItems": 0,
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "required": ["institution", "degree", "start_date"],
+        "properties": {
+          "institution": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "degree": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "start_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "end_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "skills": {
+      "type": "array",
+      "description": "A list of professional skills.",
+      "minItems": 0,
+      "maxItems": 50,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100
+      }
+    },
+    "certifications": {
+      "type": "array",
+      "description": "Professional certifications.",
+      "minItems": 0,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": ["name", "issuing_organization"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "issuing_organization": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "issue_date": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "projects": {
+      "type": "array",
+      "description": "Projects worked on.",
+      "minItems": 0,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "role", "ongoing"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 150
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "start_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "end_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "ongoing": {
+            "type": "boolean"
+          },
+          "technologies": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          "link": {
+            "type": ["string", "null"],
+            "format": "uri"
+          },
+          "achievements": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 500
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "achievements": {
+      "type": "array",
+      "description": "Professional achievements and accomplishments.",
+      "minItems": 0,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["id", "title"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 250
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "issuer": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "date": {
+            "type": ["string", "null"],
+            "format": "date"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "areas_of_interest": {
+      "type": "array",
+      "description": "Areas of professional interest.",
+      "minItems": 0,
+      "maxItems": 50,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100
+      }
+    },
+    "hobbies": {
+      "type": "array",
+      "description": "Personal hobbies and interests.",
+      "minItems": 0,
+      "maxItems": 50,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100
+      }
+    },
+    "address": {
+      "type": "object",
+      "description": "Physical address information.",
+      "properties": {
+        "street": {
+          "type": "string",
+          "maxLength": 250
+        },
+        "city": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "region": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "country": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "postal_code": {
+          "type": "string",
+          "maxLength": 50
+        },
+        "geolocation": {
+          "type": "object",
+          "properties": {
+            "lat": {
+              "type": "number"
+            },
+            "lon": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "social_urls": {
+      "type": "object",
+      "description": "Social media and professional platform URLs.",
+      "properties": {
+        "linkedin": {
+          "type": ["string", "null"],
+          "format": "uri"
+        },
+        "github": {
+          "type": ["string", "null"],
+          "format": "uri"
+        },
+        "twitter": {
+          "type": ["string", "null"],
+          "format": "uri"
+        },
+        "portfolio": {
+          "type": ["string", "null"],
+          "format": "uri"
+        },
+        "website": {
+          "type": ["string", "null"],
+          "format": "uri"
+        },
+        "other": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["label", "url"],
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "url": {
+                "type": "string",
+                "format": "uri"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "profile_picture": {
+      "type": ["object", "null"],
+      "description": "Profile picture information.",
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "thumbnail_url": {
+          "type": "string"
+        },
+        "uploaded_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "volunteering": {
+      "type": "array",
+      "description": "Volunteering experience.",
+      "minItems": 0,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["id", "organization", "role"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "organization": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "start_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "end_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "positions": {
+      "type": "array",
+      "description": "Board and leadership positions.",
+      "minItems": 0,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "organization"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "organization": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "start_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "end_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "career_breaks": {
+      "type": "array",
+      "description": "Career breaks and gaps.",
+      "minItems": 0,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": ["id", "start_date", "reason"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "start_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "end_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "reason": {
+            "type": "string",
+            "enum": ["parental", "health", "travel", "education", "other"]
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "licenses": {
+      "type": "array",
+      "description": "Professional licenses.",
+      "minItems": 0,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "issuer"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "issuer": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "license_number": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "url": {
+            "type": ["string", "null"],
+            "format": "uri"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "trainings": {
+      "type": "array",
+      "description": "Training courses and certifications.",
+      "minItems": 0,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "provider"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "certificate_url": {
+            "type": ["string", "null"],
+            "format": "uri"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "publications": {
+      "type": "array",
+      "description": "Publications and research papers.",
+      "minItems": 0,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "authors"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "authors": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 255
+            }
+          },
+          "venue": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "url": {
+            "type": ["string", "null"],
+            "format": "uri"
+          },
+          "abstract": {
+            "type": "string",
+            "maxLength": 5000
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "patents": {
+      "type": "array",
+      "description": "Patents filed or granted.",
+      "minItems": 0,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "patent_number", "status"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "patent_number": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "status": {
+            "type": "string",
+            "enum": ["filed", "granted", "pending"]
+          },
+          "filing_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "grant_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "url": {
+            "type": ["string", "null"],
+            "format": "uri"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "honors_awards": {
+      "type": "array",
+      "description": "Honors and awards received.",
+      "minItems": 0,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "issuer"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "issuer": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "test_scores": {
+      "type": "array",
+      "description": "Standardized test scores.",
+      "minItems": 0,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["id", "test_name", "score"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "test_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "score": {
+            "oneOf": [
+              {"type": "number"},
+              {"type": "string", "maxLength": 50}
+            ]
+          },
+          "max_score": {
+            "type": ["number", "null"]
+          },
+          "percentile": {
+            "type": ["number", "null"]
+          },
+          "date": {
+            "type": ["string", "null"],
+            "format": "date"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "languages": {
+      "type": "array",
+      "description": "Languages spoken with proficiency levels.",
+      "minItems": 0,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["language", "proficiency"],
+        "properties": {
+          "language": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "proficiency": {
+            "type": "string",
+            "enum": ["native", "full_professional", "limited_professional", "conversational", "basic"]
+          },
+          "certification": {
+            "type": "string",
+            "maxLength": 255
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "organizations": {
+      "type": "array",
+      "description": "Professional organizations and memberships.",
+      "minItems": 0,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "role"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "start_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "end_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "contact_info": {
+      "type": "object",
+      "description": "Contact information (sensitive, redacted for non-owners).",
+      "properties": {
+        "primary_phone": {
+          "type": "string",
+          "maxLength": 50
+        },
+        "secondary_phone": {
+          "type": "string",
+          "maxLength": 50
+        },
+        "secondary_email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 255
+        },
+        "preferred_contact_method": {
+          "type": "string",
+          "enum": ["email", "phone", "none"]
+        },
+        "timezone": {
+          "type": "string",
+          "maxLength": 100
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["personalInfo"],
+  "additionalProperties": false,
+  "examples": [
+    {
+      "description": "Minimal valid profile",
+      "value": {
+        "personalInfo": {
+          "full_name": "John Doe",
+          "email": "john.doe@example.com"
+        },
+        "summary": "Experienced software engineer with expertise in full-stack development.",
+        "experience": [],
+        "education": [],
+        "skills": []
+      }
+    },
+    {
+      "description": "Full profile with all sections",
+      "value": {
+        "personalInfo": {
+          "full_name": "Jane Smith",
+          "email": "jane.smith@example.com",
+          "phone_number": "+1-555-123-4567",
+          "location": "San Francisco, USA",
+          "portfolio_url": "https://janesmith.dev"
+        },
+        "summary": "Senior software engineer with 10+ years of experience in building scalable web applications.",
+        "experience": [
+          {
+            "company": "Tech Corp",
+            "title": "Senior Software Engineer",
+            "start_date": "2020-01-01",
+            "end_date": null,
+            "description": "Led development of microservices architecture."
+          }
+        ],
+        "education": [
+          {
+            "institution": "University of Technology",
+            "degree": "Bachelor of Science in Computer Science",
+            "start_date": "2010-09-01",
+            "end_date": "2014-05-30",
+            "description": "Graduated magna cum laude."
+          }
+        ],
+        "skills": ["Python", "JavaScript", "React", "Django"],
+        "certifications": [
+          {
+            "name": "AWS Certified Solutions Architect",
+            "issuing_organization": "Amazon Web Services",
+            "issue_date": "2022-06-15"
+          }
+        ],
+        "projects": [
+          {
+            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "title": "E-commerce Platform",
+            "role": "Lead Developer",
+            "description": "Built a scalable e-commerce platform serving 1M+ users.",
+            "start_date": "2021-01-01",
+            "end_date": "2022-12-31",
+            "ongoing": false,
+            "technologies": ["python", "django", "postgresql", "redis"],
+            "link": "https://example.com/project",
+            "achievements": ["Reduced load time by 50%", "Achieved 99.9% uptime"]
+          }
+        ],
+        "achievements": [
+          {
+            "id": "660e8400-e29b-41d4-a716-446655440000",
+            "title": "Employee of the Year",
+            "description": "Recognized for outstanding contributions",
+            "issuer": "Tech Corp",
+            "date": "2023-12-01"
+          }
+        ],
+        "areas_of_interest": ["machine learning", "cloud computing", "distributed systems"],
+        "hobbies": ["Reading", "Hiking", "Photography"],
+        "address": {
+          "street": "123 Main St",
+          "city": "San Francisco",
+          "region": "California",
+          "country": "USA",
+          "postal_code": "94102",
+          "geolocation": {
+            "lat": 37.7749,
+            "lon": -122.4194
+          }
+        },
+        "social_urls": {
+          "linkedin": "https://linkedin.com/in/janesmith",
+          "github": "https://github.com/janesmith",
+          "twitter": "https://twitter.com/janesmith",
+          "portfolio": "https://janesmith.dev",
+          "website": "https://janesmith.com",
+          "other": [
+            {
+              "label": "Medium",
+              "url": "https://medium.com/@janesmith"
+            }
+          ]
+        },
+        "profile_picture": {
+          "url": "https://cdn.example.com/profiles/janesmith.jpg",
+          "thumbnail_url": "https://cdn.example.com/profiles/janesmith_thumb.jpg",
+          "uploaded_at": "2024-01-15T10:30:00Z"
+        },
+        "volunteering": [
+          {
+            "id": "770e8400-e29b-41d4-a716-446655440000",
+            "organization": "Code for Good",
+            "role": "Volunteer Developer",
+            "start_date": "2020-01-01",
+            "end_date": null,
+            "description": "Developed open-source tools for non-profits."
+          }
+        ],
+        "positions": [
+          {
+            "id": "880e8400-e29b-41d4-a716-446655440000",
+            "title": "Board Member",
+            "organization": "Tech Community Foundation",
+            "start_date": "2022-01-01",
+            "end_date": null,
+            "description": "Served on the board of directors."
+          }
+        ],
+        "career_breaks": [
+          {
+            "id": "990e8400-e29b-41d4-a716-446655440000",
+            "start_date": "2018-06-01",
+            "end_date": "2019-01-01",
+            "reason": "education",
+            "description": "Pursued advanced certification."
+          }
+        ],
+        "licenses": [
+          {
+            "id": "aa0e8400-e29b-41d4-a716-446655440000",
+            "name": "Professional Engineer",
+            "issuer": "State Board of Engineering",
+            "license_number": "PE-12345",
+            "date": "2015-05-01",
+            "url": "https://example.com/license"
+          }
+        ],
+        "trainings": [
+          {
+            "id": "bb0e8400-e29b-41d4-a716-446655440000",
+            "title": "Advanced Kubernetes",
+            "provider": "CNCF",
+            "date": "2023-03-15",
+            "certificate_url": "https://example.com/cert",
+            "description": "Comprehensive Kubernetes administration course."
+          }
+        ],
+        "publications": [
+          {
+            "id": "cc0e8400-e29b-41d4-a716-446655440000",
+            "title": "Scalable Microservices Architecture",
+            "authors": ["Jane Smith", "John Doe"],
+            "venue": "IEEE Software",
+            "date": "2023-09-01",
+            "url": "https://example.com/paper",
+            "abstract": "This paper presents a novel approach to microservices."
+          }
+        ],
+        "patents": [
+          {
+            "id": "dd0e8400-e29b-41d4-a716-446655440000",
+            "title": "Distributed Cache System",
+            "patent_number": "US12345678",
+            "status": "granted",
+            "filing_date": "2020-01-15",
+            "grant_date": "2022-06-01",
+            "url": "https://patents.example.com/12345678"
+          }
+        ],
+        "honors_awards": [
+          {
+            "id": "ee0e8400-e29b-41d4-a716-446655440000",
+            "title": "Best Paper Award",
+            "issuer": "IEEE",
+            "date": "2023-09-01",
+            "description": "Recognized for outstanding research contribution."
+          }
+        ],
+        "test_scores": [
+          {
+            "id": "ff0e8400-e29b-41d4-a716-446655440000",
+            "test_name": "GRE",
+            "score": 330,
+            "max_score": 340,
+            "percentile": 95,
+            "date": "2010-06-15"
+          }
+        ],
+        "languages": [
+          {
+            "language": "English",
+            "proficiency": "native"
+          },
+          {
+            "language": "Spanish",
+            "proficiency": "conversational",
+            "certification": "DELE B2"
+          }
+        ],
+        "organizations": [
+          {
+            "id": "110e8400-e29b-41d4-a716-446655440000",
+            "name": "IEEE Computer Society",
+            "role": "Member",
+            "start_date": "2015-01-01",
+            "end_date": null,
+            "description": "Active member since 2015."
+          }
+        ],
+        "contact_info": {
+          "primary_phone": "+1-555-123-4567",
+          "secondary_phone": "+1-555-987-6543",
+          "secondary_email": "jane.personal@example.com",
+          "preferred_contact_method": "email",
+          "timezone": "America/Los_Angeles"
+        }
+      }
+    }
+  ]
+}

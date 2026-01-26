@@ -1,0 +1,563 @@
+%============================================================================
+% ATS-FRIENDLY PROFESSIONAL RESUME TEMPLATE
+% Version: 1.0.1
+% Engine: pdflatex
+% License: MIT
+%============================================================================
+
+\documentclass[11pt,letterpaper]{article}
+
+%----------------------------------------------------------------------------
+% PACKAGES
+%----------------------------------------------------------------------------
+\usepackage[margin=0.75in]{geometry}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage{titlesec}
+
+%----------------------------------------------------------------------------
+% HYPERLINK CONFIGURATION (ATS-safe)
+%----------------------------------------------------------------------------
+\hypersetup{
+  colorlinks=false,
+  pdfborder={0 0 0}
+}
+
+%----------------------------------------------------------------------------
+% BASIC FORMATTING
+%----------------------------------------------------------------------------
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{2pt}
+
+% List formatting for ATS compatibility
+\setlist[itemize]{leftmargin=*,itemsep=2pt,parsep=0pt,topsep=2pt}
+
+% Section title formatting (minimal, ATS-safe)
+\titleformat{\section}
+  {\large\bfseries\raggedright}
+  {}{0em}
+  {}
+  [\vspace{-8pt}\titlerule\vspace{4pt}]
+
+\titlespacing*{\section}{0pt}{12pt}{6pt}
+
+%----------------------------------------------------------------------------
+% UTILITY MACROS
+%----------------------------------------------------------------------------
+% Enable @ in command names
+\makeatletter
+
+% Safe string append macro
+% Usage: \appendtomacro{\macroname}{content}
+% Appends content to the macro, preserving existing content
+\newcommand{\appendtomacro}[2]{%
+  \expandafter\def\expandafter#1\expandafter{#1#2}%
+}
+
+%----------------------------------------------------------------------------
+% CUSTOM COMMANDS FOR DATA INJECTION
+%----------------------------------------------------------------------------
+
+% Personal Information
+\newcommand{\FullName}[1]{\def\@fullname{#1}}
+\newcommand{\Email}[1]{\def\@email{#1}}
+\newcommand{\Phone}[1]{\def\@phone{#1}}
+\newcommand{\Address}[1]{\def\@address{#1}}
+\newcommand{\LinkedIn}[1]{\def\@linkedin{#1}}
+\newcommand{\GitHub}[1]{\def\@github{#1}}
+\newcommand{\Website}[1]{\def\@website{#1}}
+\newcommand{\ProfilePhoto}[1]{\def\@profilephoto{#1}}
+
+% Professional Summary
+\newcommand{\ProfessionalSummary}[1]{\def\@summary{#1}}
+
+% Section control flags
+\newif\ifshowsummary\showsummaryfalse
+\newif\ifshowexperience\showexperiencefalse
+\newif\ifshoweducation\showeducationfalse
+\newif\ifshowcertification\showcertificationfalse
+\newif\ifshowproject\showprojectfalse
+\newif\ifshowachievement\showachievementfalse
+\newif\ifshowpublication\showpublicationfalse
+\newif\ifshowpatent\showpatentfalse
+\newif\ifshowvolunteering\showvolunteeringfalse
+\newif\ifshowlicense\showlicensefalse
+\newif\ifshowtraining\showtrainingfalse
+\newif\ifshowtestscores\showtestscoresfalse
+\newif\ifshowlanguages\showlanguagesfalse
+\newif\ifshoworganizations\showorganizationsfalse
+\newif\ifshowpositions\showpositionsfalse
+\newif\ifshowcareerbreak\showcareerbreakfalse
+
+% Storage for section content
+\def\@experiencecontent{}
+\def\@educationcontent{}
+\def\@certificationcontent{}
+\def\@projectcontent{}
+\def\@achievementcontent{}
+\def\@publicationcontent{}
+\def\@patentcontent{}
+\def\@volunteeringcontent{}
+\def\@licensecontent{}
+\def\@trainingcontent{}
+\def\@testscorescontent{}
+\def\@languagescontent{}
+\def\@organizationscontent{}
+\def\@positionscontent{}
+\def\@careerbreakcontent{}
+
+%----------------------------------------------------------------------------
+% HEADER RENDERING
+%----------------------------------------------------------------------------
+\newcommand{\RenderHeader}{%
+  \begin{center}
+    {\LARGE\bfseries\@fullname}\\[4pt]
+    \ifdefined\@email\@email\fi
+    \ifdefined\@phone\ $|$\ \@phone\fi
+    \ifdefined\@address\ $|$\ \@address\fi\\[2pt]
+    \ifdefined\@linkedin\@linkedin\fi
+    \ifdefined\@github\ $|$\ \@github\fi
+    \ifdefined\@website\ $|$\ \@website\fi
+  \end{center}
+  \vspace{6pt}
+}
+
+%----------------------------------------------------------------------------
+% EXPERIENCE SECTION
+%----------------------------------------------------------------------------
+\newcommand{\ExperienceItem}[6]{%
+  \appendtomacro{\@experiencecontent}{%
+    \noindent\textbf{#2} \hfill \textit{#3 -- #4}\\
+    \textit{#1}\if\relax\detokenize{#5}\relax\else, #5\fi\\[2pt]
+    \begin{itemize}
+      #6
+    \end{itemize}
+    \vspace{4pt}
+  }%
+  \showexperiencetrue
+}
+
+%----------------------------------------------------------------------------
+% EDUCATION SECTION
+%----------------------------------------------------------------------------
+\newcommand{\EducationItem}[6]{%
+  \appendtomacro{\@educationcontent}{%
+    \noindent\textbf{#2}\if\relax\detokenize{#3}\relax\else\ in #3\fi \hfill \textit{#4 -- #5}\\
+    \textit{#1}\\
+    \if\relax\detokenize{#6}\relax\else#6\\\fi
+    \vspace{4pt}
+  }%
+  \showeducationtrue
+}
+
+%----------------------------------------------------------------------------
+% PROJECT SECTION
+%----------------------------------------------------------------------------
+\newcommand{\ProjectItem}[5]{%
+  \appendtomacro{\@projectcontent}{%
+    \noindent\textbf{#1}\if\relax\detokenize{#2}\relax\else\ -- \textit{#2}\fi \hfill \textit{#3 -- #4}\\
+    #5\\
+    \vspace{4pt}
+  }%
+  \showprojecttrue
+}
+
+\newcommand{\ProjectItemWithLink}[6]{%
+  \appendtomacro{\@projectcontent}{%
+    \noindent\textbf{#1}\if\relax\detokenize{#2}\relax\else\ -- \textit{#2}\fi \hfill \textit{#3 -- #4}\\
+    #5\\
+    \if\relax\detokenize{#6}\relax\else Link: #6\\\fi
+    \vspace{4pt}
+  }%
+  \showprojecttrue
+}
+
+%----------------------------------------------------------------------------
+% CERTIFICATION SECTION
+%----------------------------------------------------------------------------
+\newcommand{\CertificationItem}[3]{%
+  \appendtomacro{\@certificationcontent}{%
+    \noindent\textbf{#1} \hfill \textit{#3}\\
+    \textit{#2}\\
+    \vspace{4pt}
+  }%
+  \showcertificationtrue
+}
+
+\newcommand{\CertificationItemWithNotes}[4]{%
+  \appendtomacro{\@certificationcontent}{%
+    \noindent\textbf{#1} \hfill \textit{#3}\\
+    \textit{#2}\\
+    #4\\
+    \vspace{4pt}
+  }%
+  \showcertificationtrue
+}
+
+%----------------------------------------------------------------------------
+% ACHIEVEMENT SECTION
+%----------------------------------------------------------------------------
+\newcommand{\AchievementItem}[3]{%
+  \appendtomacro{\@achievementcontent}{%
+    \noindent\textbf{#1} \hfill \textit{#3}\\
+    \textit{#2}\\
+    \vspace{4pt}
+  }%
+  \showachievementtrue
+}
+
+\newcommand{\AchievementItemWithDesc}[4]{%
+  \appendtomacro{\@achievementcontent}{%
+    \noindent\textbf{#1} \hfill \textit{#3}\\
+    \textit{#2}\\
+    #4\\
+    \vspace{4pt}
+  }%
+  \showachievementtrue
+}
+
+%----------------------------------------------------------------------------
+% PUBLICATION SECTION
+%----------------------------------------------------------------------------
+\newcommand{\PublicationItem}[4]{%
+  \appendtomacro{\@publicationcontent}{%
+    \noindent\textbf{#1} \hfill \textit{#3}\\
+    \textit{#2}\\
+    #4\\
+    \vspace{4pt}
+  }%
+  \showpublicationtrue
+}
+
+%----------------------------------------------------------------------------
+% PATENT SECTION
+%----------------------------------------------------------------------------
+\newcommand{\PatentItem}[4]{%
+  \appendtomacro{\@patentcontent}{%
+    \noindent\textbf{#1} \hfill \textit{#3}\\
+    \textit{Patent Number: #2}\\
+    #4\\
+    \vspace{4pt}
+  }%
+  \showpatenttrue
+}
+
+%----------------------------------------------------------------------------
+% VOLUNTEERING SECTION
+%----------------------------------------------------------------------------
+\newcommand{\VolunteeringItem}[4]{%
+  \appendtomacro{\@volunteeringcontent}{%
+    \noindent\textbf{#2} \hfill \textit{#3}\\
+    \textit{#1}\\
+    #4\\
+    \vspace{4pt}
+  }%
+  \showvolunteeringtrue
+}
+
+%----------------------------------------------------------------------------
+% LICENSE SECTION
+%----------------------------------------------------------------------------
+\newcommand{\LicenseItem}[3]{%
+  \appendtomacro{\@licensecontent}{%
+    \noindent\textbf{#1} \hfill \textit{#3}\\
+    \textit{#2}\\
+    \vspace{4pt}
+  }%
+  \showlicensetrue
+}
+
+\newcommand{\LicenseItemWithNotes}[4]{%
+  \appendtomacro{\@licensecontent}{%
+    \noindent\textbf{#1} \hfill \textit{#3}\\
+    \textit{#2}\\
+    #4\\
+    \vspace{4pt}
+  }%
+  \showlicensetrue
+}
+
+%----------------------------------------------------------------------------
+% TRAINING/COURSES SECTION
+%----------------------------------------------------------------------------
+\newcommand{\TrainingItem}[3]{%
+  \appendtomacro{\@trainingcontent}{%
+    \noindent\textbf{#1} \hfill \textit{#3}\\
+    \textit{#2}\\
+    \vspace{4pt}
+  }%
+  \showtrainingtrue
+}
+
+\newcommand{\TrainingItemWithNotes}[4]{%
+  \appendtomacro{\@trainingcontent}{%
+    \noindent\textbf{#1} \hfill \textit{#3}\\
+    \textit{#2}\\
+    #4\\
+    \vspace{4pt}
+  }%
+  \showtrainingtrue
+}
+
+%----------------------------------------------------------------------------
+% TEST SCORES SECTION
+%----------------------------------------------------------------------------
+\newcommand{\TestScoreItem}[3]{%
+  \appendtomacro{\@testscorescontent}{%
+    \noindent\textbf{#1}: #2 \hfill \textit{#3}\\
+    \vspace{2pt}
+  }%
+  \showtestscorestrue
+}
+
+%----------------------------------------------------------------------------
+% LANGUAGES SECTION
+%----------------------------------------------------------------------------
+\newcommand{\LanguageItem}[2]{%
+  \appendtomacro{\@languagescontent}{%
+    \noindent\textbf{#1}: #2\\
+    \vspace{2pt}
+  }%
+  \showlanguagestrue
+}
+
+%----------------------------------------------------------------------------
+% ORGANIZATIONS SECTION
+%----------------------------------------------------------------------------
+\newcommand{\OrganizationItem}[4]{%
+  \appendtomacro{\@organizationscontent}{%
+    \noindent\textbf{#2} \hfill \textit{#3}\\
+    \textit{#1}\\
+    #4\\
+    \vspace{4pt}
+  }%
+  \showorganizationstrue
+}
+
+%----------------------------------------------------------------------------
+% POSITIONS SECTION
+%----------------------------------------------------------------------------
+\newcommand{\PositionItem}[4]{%
+  \appendtomacro{\@positionscontent}{%
+    \noindent\textbf{#2} \hfill \textit{#3}\\
+    \textit{#1}\\
+    #4\\
+    \vspace{4pt}
+  }%
+  \showpositionstrue
+}
+
+%----------------------------------------------------------------------------
+% CAREER BREAK SECTION
+%----------------------------------------------------------------------------
+\newcommand{\CareerBreakItem}[3]{%
+  \appendtomacro{\@careerbreakcontent}{%
+    \noindent\textbf{Career Break} \hfill \textit{#1 -- #2}\\
+    Reason: #3\\
+    \vspace{4pt}
+  }%
+  \showcareerbreaktrue
+}
+
+%----------------------------------------------------------------------------
+% SECTION RENDERING
+%----------------------------------------------------------------------------
+\newcommand{\RenderSections}{%
+  % Professional Summary
+  \ifshowsummary
+    \section*{Professional Summary}
+    \@summary
+    \vspace{6pt}
+  \fi
+  
+  % Experience
+  \ifshowexperience
+    \section*{Experience}
+    \@experiencecontent
+  \fi
+  
+  % Education
+  \ifshoweducation
+    \section*{Education}
+    \@educationcontent
+  \fi
+  
+  % Certifications
+  \ifshowcertification
+    \section*{Certifications}
+    \@certificationcontent
+  \fi
+  
+  % Projects
+  \ifshowproject
+    \section*{Projects}
+    \@projectcontent
+  \fi
+  
+  % Achievements
+  \ifshowachievement
+    \section*{Achievements}
+    \@achievementcontent
+  \fi
+  
+  % Publications
+  \ifshowpublication
+    \section*{Publications}
+    \@publicationcontent
+  \fi
+  
+  % Patents
+  \ifshowpatent
+    \section*{Patents}
+    \@patentcontent
+  \fi
+  
+  % Volunteering
+  \ifshowvolunteering
+    \section*{Volunteering}
+    \@volunteeringcontent
+  \fi
+  
+  % Licenses
+  \ifshowlicense
+    \section*{Licenses}
+    \@licensecontent
+  \fi
+  
+  % Training/Courses
+  \ifshowtraining
+    \section*{Training \& Courses}
+    \@trainingcontent
+  \fi
+  
+  % Test Scores
+  \ifshowtestscores
+    \section*{Test Scores}
+    \@testscorescontent
+  \fi
+  
+  % Languages
+  \ifshowlanguages
+    \section*{Languages}
+    \@languagescontent
+  \fi
+  
+  % Organizations
+  \ifshoworganizations
+    \section*{Organizations}
+    \@organizationscontent
+  \fi
+  
+  % Positions
+  \ifshowpositions
+    \section*{Positions of Responsibility}
+    \@positionscontent
+  \fi
+  
+  % Career Break
+  \ifshowcareerbreak
+    \section*{Career Break}
+    \@careerbreakcontent
+  \fi
+}
+
+%============================================================================
+% DOCUMENT BEGINS
+%============================================================================
+% Disable @ in command names (back to normal)
+\makeatother
+
+\begin{document}
+
+%----------------------------------------------------------------------------
+% DATA INJECTION AREA
+% Backend should inject macro calls here
+%----------------------------------------------------------------------------
+
+% EXAMPLE DATA (Remove or replace with actual backend injection)
+
+\FullName{Alexandra Thompson}
+\Email{alexandra.thompson@email.com}
+\Phone{+1 (555) 123-4567}
+\Address{San Francisco, CA}
+\LinkedIn{linkedin.com/in/alexthompson}
+\GitHub{github.com/alexthompson}
+\Website{alexthompson.dev}
+
+\ProfessionalSummary{Results-driven software engineer with over 8 years of experience designing and implementing scalable cloud-based systems. Proven expertise in full-stack development, microservices architecture, and leading cross-functional teams. Passionate about building robust solutions that drive business growth and enhance user experience.}
+\showsummarytrue
+
+\ExperienceItem{TechCorp Inc.}{Senior Software Engineer}{January 2021}{Present}{San Francisco, CA}{%
+  \item Led development of microservices architecture serving 5M+ daily active users, reducing system latency by 40\%
+  \item Architected and deployed cloud-native solutions using AWS, Kubernetes, and Docker
+  \item Mentored team of 5 junior engineers, establishing code review processes and best practices
+  \item Collaborated with product management to define technical roadmap and prioritize features
+}
+
+\ExperienceItem{InnovateTech Solutions}{Software Engineer}{June 2018}{December 2020}{Seattle, WA}{%
+  \item Developed RESTful APIs and frontend components for enterprise SaaS platform
+  \item Implemented CI/CD pipelines reducing deployment time by 60\%
+  \item Optimized database queries improving application performance by 35\%
+  \item Participated in agile ceremonies and contributed to sprint planning
+}
+
+\ExperienceItem{StartupXYZ}{Junior Developer}{July 2016}{May 2018}{Portland, OR}{%
+  \item Built responsive web applications using React, Node.js, and MongoDB
+  \item Integrated third-party APIs including Stripe, Twilio, and SendGrid
+  \item Conducted unit and integration testing ensuring 90\%+ code coverage
+}
+
+\EducationItem{University of California, Berkeley}{Bachelor of Science}{Computer Science}{August 2012}{May 2016}{GPA: 3.8/4.0, Dean's List all semesters}
+
+\EducationItem{Stanford University}{Master of Science}{Computer Science}{September 2016}{June 2018}{Specialization: Distributed Systems and Cloud Computing}
+
+\ProjectItemWithLink{Cloud Migration Platform}{Lead Developer}{March 2022}{September 2022}{Designed and implemented automated cloud migration tool that reduced manual effort by 70\%. Utilized Python, Terraform, and AWS services. Successfully migrated 50+ applications with zero downtime.}{github.com/alexthompson/cloud-migrator}
+
+\ProjectItemWithLink{Real-Time Analytics Dashboard}{Solo Developer}{January 2021}{March 2021}{Built interactive dashboard for visualizing live data streams using React, D3.js, and WebSocket. Processed 10,000+ events per second with sub-second latency.}{alexthompson.dev/projects/analytics}
+
+\CertificationItemWithNotes{AWS Certified Solutions Architect -- Professional}{Amazon Web Services}{March 2023}{Comprehensive certification covering advanced AWS architecture, security, and cost optimization strategies.}
+
+\CertificationItem{Certified Kubernetes Administrator (CKA)}{Cloud Native Computing Foundation}{August 2022}
+
+\AchievementItemWithDesc{Employee of the Year}{TechCorp Inc.}{2022}{Recognized for exceptional contributions to platform stability and team leadership during critical product launch.}
+
+\AchievementItem{Hackathon Winner}{InnovateTech Annual Hackathon}{2019}
+
+\PublicationItem{Optimizing Microservices Communication Patterns}{IEEE Software Engineering Journal, Volume 45, Issue 3}{June 2023}{Co-authored research paper analyzing latency reduction techniques in distributed systems. Paper presented at International Conference on Software Architecture.}
+
+\PatentItem{System and Method for Automated Database Query Optimization}{US10234567B2}{January 2024}{Novel approach to dynamically optimizing database queries using machine learning algorithms. Patent pending in EU and Asia.}
+
+\VolunteeringItem{Code for Good Foundation}{Technical Mentor}{September 2020}{Present}{Mentor underrepresented students in computer science, providing guidance on projects and career development. Conducted 50+ mentoring sessions and organized coding workshops.}
+
+\VolunteeringItem{Local Tech Meetup}{Organizer}{January 2019}{August 2021}{Organized monthly meetups for 200+ developers, coordinated speakers, and facilitated networking events.}
+
+\LicenseItem{Professional Engineer (PE) License}{California Board of Professional Engineers}{Valid through December 2026}
+
+\TrainingItemWithNotes{Advanced System Design}{Educative.io}{Completed January 2023}{Intensive 12-week course covering distributed systems, scalability patterns, and architectural trade-offs.}
+
+\TrainingItem{Machine Learning Specialization}{Coursera (Stanford University)}{Completed September 2021}
+
+\TestScoreItem{GRE}{Quantitative: 170, Verbal: 165, Analytical Writing: 5.0}{December 2015}
+
+\TestScoreItem{TOEFL iBT}{115/120}{June 2015}
+
+\LanguageItem{English}{Native proficiency}
+\LanguageItem{Spanish}{Professional working proficiency}
+\LanguageItem{Mandarin Chinese}{Elementary proficiency}
+
+\OrganizationItem{Association for Computing Machinery (ACM)}{Member}{January 2017}{Present}{Active participant in Special Interest Group on Software Engineering (SIGSOFT). Attend annual conferences and contribute to working groups.}
+
+\PositionItem{TechCorp Engineering Council}{Council Member}{January 2023}{Present}{Elected representative on engineering council responsible for technical standards, tool selection, and engineering culture initiatives.}
+
+\CareerBreakItem{June 2020}{September 2020}{Sabbatical for family care and professional development. Completed online courses in cloud architecture and obtained AWS certification.}
+
+%----------------------------------------------------------------------------
+% RENDER DOCUMENT
+%----------------------------------------------------------------------------
+\RenderHeader
+\RenderSections
+
+\end{document}

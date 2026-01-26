@@ -53,29 +53,33 @@ def process_resume_generation(self, generation_id: str):
     - LaTeX compile errors cause failure
     - All errors are logged with request ID (no PII)
     """
-    logger.info("Starting resume generation: %s", generation_id)
+    logger.info("[PDF Generation] Starting resume generation process for generation_id: %s", generation_id)
     
     try:
         # Get the generation request
+        logger.debug("[PDF Generation] Fetching generation request from database: %s", generation_id)
         generation_request = ResumeGenerationRequest.objects.get(id=generation_id)
+        logger.info("[PDF Generation] Generation request found: %s (status: %s)", generation_id, generation_request.status)
     except ResumeGenerationRequest.DoesNotExist:
-        logger.error("Generation request not found: %s", generation_id)
+        logger.error("[PDF Generation] Generation request not found: %s", generation_id)
         return
     
     # Check if already processed (idempotency)
     if generation_request.status != ResumeGenerationRequest.STATUS_PENDING:
         logger.warning(
-            "Generation request %s already in status: %s",
+            "[PDF Generation] Generation request %s already in status: %s (skipping)",
             generation_id, generation_request.status
         )
         return
     
     # Mark as processing
+    logger.info("[PDF Generation] Marking generation request as processing: %s", generation_id)
     generation_request.mark_processing()
     
     try:
         # Get main template content from LaTeX service
         # All resumes are generated from main.tex
+        logger.info("[PDF Generation] Initializing LaTeX service client")
         latex_client = LaTeXServiceClient()
         
         # Run async code in sync context
@@ -84,19 +88,38 @@ def process_resume_generation(self, generation_id: str):
         
         try:
             # Get main template content from LaTeX service
+            logger.info("[PDF Generation] Fetching main template content from LaTeX service")
             template_content = loop.run_until_complete(
                 latex_client.get_main_template_content()
             )
+            logger.info("[PDF Generation] Template content received (length: %d chars)", len(template_content))
         finally:
             loop.close()
         
         # Call AI agent
+        logger.info("[PDF Generation] Initializing AI agent client")
         ai_client = AIAgentClient()
+        
+        # Log profile data summary (without PII)
+        profile_snapshot = generation_request.profile_snapshot
+        profile_summary = {
+            'has_experience': bool(profile_snapshot.get('experience')),
+            'experience_count': len(profile_snapshot.get('experience', [])),
+            'has_education': bool(profile_snapshot.get('education')),
+            'education_count': len(profile_snapshot.get('education', [])),
+            'has_skills': bool(profile_snapshot.get('skills')),
+            'skills_count': len(profile_snapshot.get('skills', [])),
+            'has_projects': bool(profile_snapshot.get('projects')),
+            'projects_count': len(profile_snapshot.get('projects', [])),
+        }
+        logger.info("[PDF Generation] Sending user profile to AI agent. Profile summary: %s", profile_summary)
+        logger.debug("[PDF Generation] Job description length: %d chars", len(generation_request.job_description.text))
         
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
         try:
+            logger.info("[PDF Generation] Calling AI agent to customize LaTeX template")
             ai_result = loop.run_until_complete(
                 ai_client.generate_resume(
                     profile_data=generation_request.profile_snapshot,
@@ -105,6 +128,8 @@ def process_resume_generation(self, generation_id: str):
                     template_id='main',  # Use 'main' as template identifier
                 )
             )
+            logger.info("[PDF Generation] AI agent response received. LaTeX source length: %d chars", len(ai_result.latex_source))
+            logger.info("[PDF Generation] AI agent modifications: %s", ai_result.modifications)
         finally:
             loop.close()
         
@@ -112,13 +137,16 @@ def process_resume_generation(self, generation_id: str):
         modifications = ai_result.modifications
         
         # Validate AI output for hallucinations
+        logger.info("[PDF Generation] Validating AI output for hallucinations and content integrity")
         ResumeGenerationService.validate_ai_output(
             generation_request,
             latex_source,
             modifications
         )
+        logger.info("[PDF Generation] AI output validation passed")
         
         # Compile LaTeX to PDF using LaTeX service
+        logger.info("[PDF Generation] Compiling LaTeX source to PDF (output filename: %s)", str(generation_request.id))
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
@@ -130,17 +158,19 @@ def process_resume_generation(self, generation_id: str):
                     template_id=None,  # No template-specific assets needed for main.tex
                 )
             )
+            logger.info("[PDF Generation] LaTeX compilation successful. PDF saved at: %s", compile_result.pdf_path)
         finally:
             loop.close()
         
         # Mark as success
+        logger.info("[PDF Generation] Marking generation request as successful: %s", generation_id)
         generation_request.mark_success(
             latex_source=latex_source,
             pdf_path=compile_result.pdf_path,
             modifications=modifications,
         )
         
-        logger.info("Resume generation completed: %s", generation_id)
+        logger.info("[PDF Generation] Resume generation completed successfully: %s", generation_id)
         
     except ModelOutputInvalidException as e:
         logger.error(

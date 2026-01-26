@@ -1,0 +1,19 @@
+{
+  "id": "ats-professional",
+  "name": "ATS Professional Resume",
+  "description": "Production-ready ATS-compliant resume template with comprehensive field support",
+  "author": "LaTeX Template Team",
+  "version": "1.0.1",
+  "placeholders": [],
+  "default_filename": "resume",
+  "required_packages": [
+    "geometry",
+    "enumitem",
+    "hyperref",
+    "xcolor",
+    "microtype",
+    "titlesec"
+  ],
+  "compile_engine": "pdflatex",
+  "compile_runs": 2
+}

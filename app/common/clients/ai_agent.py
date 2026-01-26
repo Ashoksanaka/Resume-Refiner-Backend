@@ -173,7 +173,8 @@ class AIAgentClient:
     
     def __init__(self):
         self.base_url = getattr(settings, 'AI_AGENT_URL', 'http://localhost:8001')
-        self.timeout = getattr(settings, 'AI_AGENT_TIMEOUT', 60)
+        # Set timeout to at least 180 seconds to account for Gemini API latency (120s) + processing time
+        self.timeout = getattr(settings, 'AI_AGENT_TIMEOUT', 180)
     
     async def generate_resume(
         self,
@@ -198,14 +199,36 @@ class AIAgentClient:
             AIServiceException: If the AI service fails
             ModelOutputInvalidException: If the output is invalid
         """
-        logger.info("AI agent called for template: %s", template_id)
+        logger.info("[AI Agent Client] Called for template: %s", template_id)
+        logger.debug("[AI Agent Client] Input profile keys: %s", list(profile_data.keys()))
+        logger.debug("[AI Agent Client] Job description length: %d chars", len(job_description_text))
+        logger.debug("[AI Agent Client] Template content length: %d chars", len(template_content))
         
         # SECURITY: Whitelist profile data before sending to AI
         # This ensures sensitive fields (contact_info, profile_picture.url, address) are never sent
+        logger.info("[AI Agent Client] Whitelisting profile data (removing sensitive fields)")
         safe_profile_data = whitelist_profile_for_ai(profile_data)
+        logger.debug("[AI Agent Client] Whitelisted profile keys: %s", list(safe_profile_data.keys()))
+        
+        # Log profile structure summary
+        profile_summary = {
+            'has_experience': bool(safe_profile_data.get('experience')),
+            'experience_count': len(safe_profile_data.get('experience', [])),
+            'has_education': bool(safe_profile_data.get('education')),
+            'education_count': len(safe_profile_data.get('education', [])),
+            'has_skills': bool(safe_profile_data.get('skills')),
+            'skills_count': len(safe_profile_data.get('skills', [])),
+            'has_projects': bool(safe_profile_data.get('projects')),
+            'projects_count': len(safe_profile_data.get('projects', [])),
+        }
+        logger.info("[AI Agent Client] Parsed user profile summary: %s", profile_summary)
         
         try:
             # Call the actual AI agent microservice
+            logger.info("[AI Agent Client] Sending request to AI agent service at: %s/generate", self.base_url)
+            logger.debug("[AI Agent Client] Request payload size: profile=%d bytes, job_description=%d bytes, template=%d bytes",
+                        len(str(safe_profile_data)), len(job_description_text), len(template_content))
+            
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(
                     f"{self.base_url}/generate",
@@ -216,6 +239,7 @@ class AIAgentClient:
                         "template_id": template_id,
                     }
                 )
+                logger.info("[AI Agent Client] Received response from AI agent service (status: %d)", response.status_code)
                 
                 # Handle error responses from agent
                 if response.status_code != 200:
@@ -249,17 +273,25 @@ class AIAgentClient:
                         raise AIServiceException(error_msg)
                 
                 result = response.json()
+                logger.debug("[AI Agent Client] Response parsed successfully")
             
             # Validate the response structure
+            logger.info("[AI Agent Client] Validating AI agent response structure")
             self._validate_response_structure(result)
+            logger.info("[AI Agent Client] Response structure validation passed")
             
             # Validate LaTeX starts with \documentclass
             latex_source = result['latex_source']
+            logger.info("[AI Agent Client] Received LaTeX source (length: %d chars)", len(latex_source))
+            
             if not latex_source.strip().startswith('\\documentclass'):
-                logger.error("AI output does not start with \\documentclass")
+                logger.error("[AI Agent Client] AI output does not start with \\documentclass")
+                logger.debug("[AI Agent Client] First 100 chars of output: %s", latex_source[:100])
                 raise ModelOutputInvalidException(
                     "AI output is not valid LaTeX (must start with \\documentclass)."
                 )
+            
+            logger.info("[AI Agent Client] LaTeX source validation passed. Modifications: %s", result.get('modifications', []))
             
             return AIGenerationResult(
                 latex_source=latex_source,

@@ -24,7 +24,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY --chown=latex:latex main.py .
+COPY --chown=latex:latex main.py validator.py .
 
 # Copy templates directory
 COPY --chown=latex:latex templates/ /app/templates/

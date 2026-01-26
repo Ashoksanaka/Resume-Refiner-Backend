@@ -115,8 +115,29 @@ celerybeat.pid
 # QA and development artifacts (should not be in production codebase)
 artifacts/
 qa/
+qa-artifacts/
 reports/
 assignment.txt
+assignment.md
 CHANGELOG.md
 *.md.backup
 test-output.txt
+
+# Temporary test files (investigation/debug scripts)
+test_*.py
+run_integration_tests.py
+test_artifacts.py
+test_compile.py
+test_fix_direct.py
+test_real_scenario.py
+
+# Investigation scripts (one-off scripts for debugging)
+scripts/extract_*.py
+scripts/debug_*.py
+scripts/investigate_*.py
+
+# Temporary directories
+debug/
+tmp/
+temp/
+latex-failures/

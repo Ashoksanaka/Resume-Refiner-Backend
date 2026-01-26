@@ -242,7 +242,7 @@ DATA_TTL_HOURS = config('DATA_TTL_HOURS', default=24, cast=int)
 
 # AI Agent configuration
 AI_AGENT_URL = config('AI_AGENT_URL', default='http://localhost:8001')
-AI_AGENT_TIMEOUT = config('AI_AGENT_TIMEOUT', default=120, cast=int)  # Increased for Gemini API latency
+AI_AGENT_TIMEOUT = config('AI_AGENT_TIMEOUT', default=180, cast=int)  # Increased for Gemini API latency (120s) + processing overhead
 
 # LaTeX microservice configuration
 LATEX_SERVICE_URL = config('LATEX_SERVICE_URL', default='http://localhost:8002')

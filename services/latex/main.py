@@ -30,6 +30,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, field_validator
 
+# Import validator
+# Use absolute import since we're running as a script, not a package
+from validator import latex_validator, ValidationErrorType
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -309,13 +313,28 @@ class PlaceholderSubstitutor:
     }
     
     @classmethod
-    def escape_latex(cls, text: str) -> str:
-        """Escape special LaTeX characters in text."""
+    def escape_latex(cls, text: str, max_length: Optional[int] = None) -> str:
+        """
+        Escape special LaTeX characters in text.
+        
+        Args:
+            text: Text to escape
+            max_length: Optional maximum length. If provided, text will be truncated
+                       to avoid breaking macros or causing compilation issues.
+        
+        Returns:
+            Escaped LaTeX-safe text
+        """
         if not isinstance(text, str):
-            return str(text)
+            text = str(text)
+        
+        # Truncate if too long (to avoid breaking macros)
+        if max_length and len(text) > max_length:
+            text = text[:max_length].rstrip() + '...'
         
         result = text
-        for char, escape in cls.LATEX_ESCAPE_MAP.items():
+        # Escape in order - backslash first to avoid double-escaping
+        for char, escape in sorted(cls.LATEX_ESCAPE_MAP.items(), key=lambda x: x[0] == '\\', reverse=True):
             result = result.replace(char, escape)
         return result
     
@@ -567,7 +586,10 @@ class PlaceholderSubstitutor:
             if isinstance(value, (list, dict)):
                 return ''  # Complex types should be handled by array processing
             
-            return cls.escape_latex(str(value))
+            # Truncate very long fields to avoid breaking LaTeX macros
+            # Common fields that might be long: descriptions, summaries, etc.
+            max_length = 5000  # Reasonable limit for LaTeX content
+            return cls.escape_latex(str(value), max_length=max_length)
         
         return re.sub(pattern, replace_placeholder, template)
 
@@ -582,10 +604,87 @@ def fix_latex_before_compile(latex_source: str) -> str:
     
     This runs in the LaTeX service to catch issues that might have
     slipped through the AI agent's fixes.
+    
+    Auto-fixes are applied only when safe and deterministic.
     """
+    original_source = latex_source
+    
+    # Ensure \begin{document} exists - if missing, add it
+    if '\\begin{document}' not in latex_source:
+        # Try to find where document should start (after \documentclass)
+        docclass_match = re.search(r'\\documentclass[^\n]*', latex_source)
+        if docclass_match:
+            # Insert \begin{document} after documentclass and packages
+            insert_pos = docclass_match.end()
+            # Find end of preamble (last \usepackage or similar)
+            preamble_end = latex_source.find('\\usepackage', insert_pos)
+            if preamble_end == -1:
+                preamble_end = insert_pos
+            else:
+                # Find last \usepackage
+                while True:
+                    next_pkg = latex_source.find('\\usepackage', preamble_end + 1)
+                    if next_pkg == -1:
+                        break
+                    preamble_end = next_pkg
+                # Find end of last package line
+                next_newline = latex_source.find('\n', preamble_end)
+                if next_newline != -1:
+                    preamble_end = next_newline + 1
+            
+            latex_source = latex_source[:preamble_end] + '\n\\begin{document}\n' + latex_source[preamble_end:]
+        else:
+            # No documentclass - add minimal structure
+            latex_source = '\\documentclass{article}\n\\begin{document}\n' + latex_source
+    
+    # Fix AI agent hallucinations: Convert \sectiontitle{...} to \section*{...}
+    # The AI agent sometimes generates \sectiontitle which doesn't exist
+    # Auto-fix: Replace with standard \section* command
+    latex_source = re.sub(
+        r'\\sectiontitle\{([^}]+)\}',
+        r'\\section*{\1}',
+        latex_source
+    )
+    latex_source = re.sub(
+        r'\\sectionTitle\{([^}]+)\}',
+        r'\\section*{\1}',
+        latex_source
+    )
+    latex_source = re.sub(
+        r'\\SectionTitle\{([^}]+)\}',
+        r'\\section*{\1}',
+        latex_source
+    )
+    
+    # Ensure \begin{document} exists after all fixes above
+    if '\\begin{document}' not in latex_source:
+        # This shouldn't happen if the code above worked, but add it as a safety net
+        docclass_match = re.search(r'\\documentclass[^\n]*', latex_source)
+        if docclass_match:
+            # Find end of preamble
+            insert_pos = docclass_match.end()
+            # Look for last \usepackage or other preamble commands
+            preamble_end = max(
+                latex_source.rfind('\\usepackage'),
+                latex_source.rfind('\\RequirePackage'),
+                latex_source.rfind('\\documentclass')
+            )
+            if preamble_end == -1:
+                preamble_end = insert_pos
+            else:
+                # Find end of last preamble line
+                next_newline = latex_source.find('\n', preamble_end)
+                if next_newline != -1:
+                    preamble_end = next_newline + 1
+                else:
+                    preamble_end = len(latex_source)
+            latex_source = latex_source[:preamble_end] + '\n\\begin{document}\n' + latex_source[preamble_end:]
+        else:
+            latex_source = '\\documentclass{article}\n\\begin{document}\n' + latex_source
+    
     # Fix duplicate command definitions and invalid command names
     # Convert duplicate \newcommand to \providecommand (safer than removing)
-    parts = latex_source.split('\\begin{document}')
+    parts = latex_source.split('\\begin{document}', 1)  # Split only on first occurrence
     if len(parts) == 2:
         preamble, body = parts
         commands_defined = set()
@@ -619,7 +718,95 @@ def fix_latex_before_compile(latex_source: str) -> str:
             result_lines.append(line)
         
         preamble = '\n'.join(result_lines)
+        # Ensure \end{document} exists in body
+        if '\\end{document}' not in body:
+            body = body + '\n\\end{document}'
         latex_source = preamble + '\\begin{document}' + body
+    
+    # CRITICAL FIX: Fix math mode imbalances ($ and $$)
+    # LaTeX has two types of math mode:
+    # - Inline math: $...$ (single dollar signs)
+    # - Display math: $$...$$ (double dollar signs)
+    # Both must be balanced
+    
+    def fix_math_mode(source):
+        """
+        Fix unbalanced math mode delimiters.
+        
+        LaTeX has two types of math mode:
+        - Inline math: $...$ (single dollar signs)
+        - Display math: $$...$$ (double dollar signs)
+        Both must be balanced.
+        """
+        # Step 1: Handle display math ($$...$$) first
+        # Count $$ pairs - they must be balanced
+        double_dollar_count = source.count('$$')
+        if double_dollar_count % 2 != 0:
+            # Unbalanced display math - find where to add closing $$
+            # Find all $$ positions to determine if we need to close
+            double_dollar_positions = []
+            pos = 0
+            while True:
+                pos = source.find('$$', pos)
+                if pos == -1:
+                    break
+                double_dollar_positions.append(pos)
+                pos += 2
+            
+            # If odd number of $$, we need to add a closing $$
+            if len(double_dollar_positions) % 2 != 0:
+                # Find the best place to add closing $$
+                if '\\end{document}' in source:
+                    end_doc_pos = source.rfind('\\end{document}')
+                    # Check if there's already a $$ right before \end{document}
+                    check_start = max(0, end_doc_pos - 2)
+                    before_end = source[check_start:end_doc_pos]
+                    if before_end != '$$':
+                        # Insert $$ before \end{document}
+                        source = source[:end_doc_pos] + '$$' + source[end_doc_pos:]
+                else:
+                    # No \end{document} - add $$ at the end
+                    source = source + '$$'
+            
+            # Double-check: after fixing, count should be even
+            # If still odd, add another $$ (safety net)
+            if source.count('$$') % 2 != 0:
+                if '\\end{document}' in source:
+                    end_doc_pos = source.rfind('\\end{document}')
+                    source = source[:end_doc_pos] + '$$' + source[end_doc_pos:]
+                else:
+                    source = source + '$$'
+        
+        # Step 2: Handle inline math ($...$) - but exclude $$ pairs
+        # Use a placeholder to temporarily replace $$ so we can count single $ separately
+        placeholder = '___DOUBLE_DOLLAR_PLACEHOLDER___'
+        temp_source = source.replace('$$', placeholder)
+        
+        # Count single $ signs (not part of $$)
+        single_dollar_count = temp_source.count('$')
+        if single_dollar_count % 2 != 0:
+            # Unbalanced inline math - add closing $ before \end{document} or \end{center}
+            if '\\end{document}' in source:
+                end_doc_pos = source.rfind('\\end{document}')
+                # Check if there's already a $ right before \end{document}
+                check_start = max(0, end_doc_pos - 1)
+                before_end = source[check_start:end_doc_pos]
+                if before_end != '$':
+                    # Insert $ before \end{document}
+                    source = source[:end_doc_pos] + '$' + source[end_doc_pos:]
+            elif '\\end{center}' in source:
+                # Add $ before \end{center}
+                source = source.replace('\\end{center}', '$\\end{center}', 1)
+            else:
+                # Add $ at the end
+                source = source + '$'
+        
+        # Restore $$ from placeholder (in case any were in the source)
+        source = source.replace(placeholder, '$$')
+        
+        return source
+    
+    latex_source = fix_math_mode(latex_source)
     
     # Fix math mode issues - ensure $|$ separators are properly closed
     # Fix cases where math mode might be left open before \end{center}
@@ -627,8 +814,9 @@ def fix_latex_before_compile(latex_source: str) -> str:
     center_sections = re.finditer(r'\\begin\{center\}.*?\\end\{center\}', latex_source, flags=re.DOTALL)
     for match in center_sections:
         center_content = match.group(0)
-        # Count $ signs in this center block
-        dollar_count = center_content.count('$')
+        # Count $ signs in this center block (excluding $$ pairs)
+        temp_center = center_content.replace('$$', '')
+        dollar_count = temp_center.count('$')
         if dollar_count % 2 != 0:
             # Math mode is unclosed - find the last $ and ensure it's closed
             # Replace the center block with a fixed version
@@ -638,15 +826,24 @@ def fix_latex_before_compile(latex_source: str) -> str:
                 # Ensure each $|$ is properly closed (it should be, but check)
                 # Count $ before \end{center}
                 before_end = fixed_center[:fixed_center.rfind('\\end{center}')]
-                dollar_before = before_end.count('$')
+                temp_before = before_end.replace('$$', '')
+                dollar_before = temp_before.count('$')
                 if dollar_before % 2 != 0:
                     # Add closing $ before \end{center}
                     fixed_center = fixed_center.replace('\\end{center}', '$\\end{center}', 1)
                     latex_source = latex_source.replace(center_content, fixed_center, 1)
     
     # Fix itemize/enumerate issues - "missing \item" errors
-    # Remove empty itemize/enumerate environments
-    latex_source = re.sub(r'\\begin\{(itemize|enumerate)\}[\s\n]*\\end\{(itemize|enumerate)\}', '', latex_source)
+    # This must be done carefully to handle nested environments correctly
+    
+    # First, remove completely empty list environments (no content at all)
+    # Handle various whitespace patterns
+    latex_source = re.sub(
+        r'\\begin\{(itemize|enumerate)\}[\s\n%]*\\end\{(itemize|enumerate)\}',
+        '',
+        latex_source,
+        flags=re.MULTILINE
+    )
     
     # Fix itemize/enumerate with text before first \item
     # Pattern: \begin{itemize}\n[text]\n\item -> \begin{itemize}\n\item
@@ -664,53 +861,253 @@ def fix_latex_before_compile(latex_source: str) -> str:
         latex_source
     )
     
-    # Ensure every \begin{itemize} or \begin{enumerate} has at least one \item
-    # If not, remove the environment
+    # CRITICAL FIX: Fix mismatched environment names FIRST (before other processing)
+    # This prevents errors like \begin{itemize}...\end{tightitemize} or \begin{itemize}...\end{enumerate}
+    def fix_mismatched_environments(source):
+        """
+        Fix mismatched begin/end environment names.
+        
+        This function ensures that every \\begin{env} is closed with \\end{env} (matching name).
+        It handles:
+        - Direct mismatches: \begin{itemize}...\end{enumerate}
+        - Variant names: \begin{itemize}...\end{tightitemize}
+        - All LaTeX environments, not just itemize/enumerate
+        """
+        # Find all begin/end pairs and fix mismatches
+        # Pattern to match \begin{env}...\end{different_env}
+        # Use non-greedy matching to handle nested environments correctly
+        pattern = r'\\begin\{([^}]+)\}(.*?)\\end\{([^}]+)\}'
+        
+        def fix_match(match):
+            begin_env = match.group(1)
+            content = match.group(2)
+            end_env = match.group(3)
+            
+            # If environments don't match, fix the end to match begin
+            if begin_env != end_env:
+                # Normalize common mismatches for list environments
+                # Handle tightitemize, compactitemize, etc. -> itemize
+                normalized_begin = begin_env
+                normalized_end = end_env
+                
+                # Check if both are list-related environments
+                begin_lower = begin_env.lower()
+                end_lower = end_env.lower()
+                
+                if 'itemize' in begin_lower or 'itemize' in end_lower:
+                    # Both are itemize variants - normalize to 'itemize'
+                    normalized_begin = 'itemize'
+                elif 'enumerate' in begin_lower or 'enumerate' in end_lower:
+                    # Both are enumerate variants - normalize to 'enumerate'
+                    normalized_begin = 'enumerate'
+                elif 'description' in begin_lower or 'description' in end_lower:
+                    # Both are description variants - normalize to 'description'
+                    normalized_begin = 'description'
+                
+                # If normalization worked, use normalized name
+                # Otherwise, use the begin environment name (most reliable)
+                if normalized_begin != begin_env and ('itemize' in begin_lower or 'enumerate' in begin_lower or 'description' in begin_lower):
+                    return f'\\begin{{{normalized_begin}}}{content}\\end{{{normalized_begin}}}'
+                else:
+                    # Use the begin environment name (most reliable)
+                    return f'\\begin{{{begin_env}}}{content}\\end{{{begin_env}}}'
+            
+            return match.group(0)  # No change needed
+        
+        # Apply fix iteratively to handle nested cases
+        # Process from innermost to outermost by using multiple passes
+        max_iterations = 10
+        for _ in range(max_iterations):
+            old_source = source
+            source = re.sub(pattern, fix_match, source, flags=re.DOTALL)
+            if old_source == source:
+                break
+        
+        return source
+    
+    # Apply environment mismatch fix first
+    latex_source = fix_mismatched_environments(latex_source)
+    
+    # More comprehensive check: ensure every \begin{itemize} or \begin{enumerate} has at least one \item
+    # This handles nested cases and various content patterns
     def fix_empty_lists(match):
-        env_type = match.group(1)
+        begin_env = match.group(1)  # Environment name from \begin
         content = match.group(2)
-        # Check if there's at least one \item
-        if '\\item' not in content:
-            return ''  # Remove empty list
+        end_env = match.group(3)   # Environment name from \end
+        
+        # CRITICAL: Fix mismatched environments immediately (safety check)
+        if begin_env != end_env:
+            # Replace the mismatched \end with the correct one
+            return f'\\begin{{{begin_env}}}{content}\\end{{{begin_env}}}'
+        
+        # Remove comments and whitespace for checking
+        content_clean = re.sub(r'%.*', '', content)  # Remove comments
+        content_clean = content_clean.strip()  # Remove leading/trailing whitespace
+        
+        # Check if there's at least one \item (not inside a comment)
+        # Look for \item that's not part of a comment
+        has_item = False
+        lines = content.split('\n')
+        for line in lines:
+            # Remove comment portion
+            comment_pos = line.find('%')
+            if comment_pos != -1:
+                line = line[:comment_pos]
+            if '\\item' in line:
+                has_item = True
+                break
+        
+        if not has_item and not content_clean:
+            return ''  # Remove completely empty list
+        elif not has_item:
+            # Has content but no \item - this will cause "missing \item" error
+            # CRITICAL: Don't remove the environment if it has substantial content
+            # Only remove if content is very short (likely just whitespace/comments)
+            if len(content_clean) < 50:
+                # Very short content - safe to remove
+                return content_clean if content_clean else ''
+            else:
+                # Substantial content but no \item - keep the environment structure
+                # This might cause a compilation error, but it's better than losing content
+                logger.warning("[fix_empty_lists] List environment has content (%d chars) but no \\item - keeping structure", len(content_clean))
+                return match.group(0)  # Keep original - don't remove
+        
         return match.group(0)  # Keep if it has items
     
-    latex_source = re.sub(
-        r'\\begin\{(itemize|enumerate)\}(.*?)\\end\{(itemize|enumerate)\}',
-        fix_empty_lists,
-        latex_source,
-        flags=re.DOTALL
-    )
+    # Apply fix multiple times to handle nested cases
+    # CRITICAL: Use capturing groups to ensure begin/end match
+    # CRITICAL: Do NOT use DOTALL - it causes matches across section boundaries
+    # Instead, split by sections first to avoid cross-boundary matches
+    max_iterations = 10
     
-    # Fix unmatched itemize/enumerate environments
-    # Count opens and closes, remove extras
+    # Store original to detect content loss
+    original_length = len(latex_source)
+    original_has_sections = bool(re.search(r'\\section\*?\{', latex_source))
+    
+    for iteration in range(max_iterations):
+        old_source = latex_source
+        old_length = len(latex_source)
+        
+        # Split by sections to avoid matching across section boundaries
+        section_pattern = r'(\\section\*?\{[^}]+\})'
+        parts = re.split(section_pattern, latex_source)
+        
+        if len(parts) > 1:
+            # Process each section separately
+            processed_parts = []
+            for i, part in enumerate(parts):
+                if i % 2 == 0:
+                    # This is content between sections
+                    if part.strip():
+                        # Apply fix only within this section's content
+                        part = re.sub(
+                            r'\\begin\{((itemize|enumerate|description))\}(.*?)\\end\{((itemize|enumerate|description))\}',
+                            fix_empty_lists,
+                            part,
+                            flags=re.MULTILINE  # Use MULTILINE instead of DOTALL
+                        )
+                    processed_parts.append(part)
+                else:
+                    # This is a section header - keep as-is
+                    processed_parts.append(part)
+            latex_source = ''.join(processed_parts)
+        else:
+            # No sections found, apply fix normally but be cautious
+            latex_source = re.sub(
+                r'\\begin\{((itemize|enumerate|description))\}(.*?)\\end\{((itemize|enumerate|description))\}',
+                fix_empty_lists,
+                latex_source,
+                flags=re.MULTILINE  # Use MULTILINE instead of DOTALL
+            )
+        
+        # Verify we didn't lose too much content
+        if len(latex_source) < old_length * 0.7:
+            logger.error("[fix_latex_before_compile] CRITICAL: fix_empty_lists removed too much content (%d -> %d chars) in iteration %d. Reverting.", 
+                        old_length, len(latex_source), iteration)
+            latex_source = old_source
+            break
+        
+        # Verify sections are still present
+        if original_has_sections:
+            if not re.search(r'\\section\*?\{', latex_source):
+                logger.error("[fix_latex_before_compile] CRITICAL: Sections were removed by fix_empty_lists in iteration %d. Reverting.", iteration)
+                latex_source = old_source
+                break
+        
+        # Stop if no more changes
+        if old_source == latex_source:
+            break
+    
+    # Final check: if we lost more than 30% of content, something went wrong
+    if len(latex_source) < original_length * 0.7:
+        logger.error("[fix_latex_before_compile] CRITICAL: Total content loss detected (%d -> %d chars). This indicates a serious bug.", 
+                    original_length, len(latex_source))
+    
+    # Fix unmatched itemize/enumerate environments - SAFE AUTO-FIX
+    # Only fix if imbalance is obvious and fixable (single missing brace/environment)
     itemize_opens = len(re.findall(r'\\begin\{itemize\}', latex_source))
     itemize_closes = len(re.findall(r'\\end\{itemize\}', latex_source))
     enumerate_opens = len(re.findall(r'\\begin\{enumerate\}', latex_source))
     enumerate_closes = len(re.findall(r'\\end\{enumerate\}', latex_source))
     
-    # If there are more closes than opens, remove extra closes from the end
-    if itemize_closes > itemize_opens:
-        for _ in range(itemize_closes - itemize_opens):
-            latex_source = re.sub(r'\\end\{itemize\}', '', latex_source, count=1)
+    # Only auto-fix if imbalance is small (1-2) to avoid inventing structure
+    max_safe_imbalance = 2
     
-    if enumerate_closes > enumerate_opens:
+    # If there are more closes than opens, remove extra closes from the end (safe)
+    if itemize_closes > itemize_opens and (itemize_closes - itemize_opens) <= max_safe_imbalance:
+        for _ in range(itemize_closes - itemize_opens):
+            # Remove last occurrence
+            parts = latex_source.rsplit('\\end{itemize}', 1)
+            if len(parts) == 2:
+                latex_source = parts[0] + parts[1]
+    
+    if enumerate_closes > enumerate_opens and (enumerate_closes - enumerate_opens) <= max_safe_imbalance:
         for _ in range(enumerate_closes - enumerate_opens):
-            latex_source = re.sub(r'\\end\{enumerate\}', '', latex_source, count=1)
+            # Remove last occurrence
+            parts = latex_source.rsplit('\\end{enumerate}', 1)
+            if len(parts) == 2:
+                latex_source = parts[0] + parts[1]
     
     # If there are more opens than closes, add missing closes at the end (before \end{document})
-    if itemize_opens > itemize_closes:
+    # Only if imbalance is small and safe
+    if itemize_opens > itemize_closes and (itemize_opens - itemize_closes) <= max_safe_imbalance:
         missing = itemize_opens - itemize_closes
         # Add before \end{document}
-        latex_source = re.sub(r'\\end\{document\}', '\\end{itemize}\n' * missing + '\\end{document}', latex_source, count=1)
+        if '\\end{document}' in latex_source:
+            latex_source = latex_source.replace('\\end{document}', '\\end{itemize}\n' * missing + '\\end{document}', 1)
     
-    if enumerate_opens > enumerate_closes:
+    if enumerate_opens > enumerate_closes and (enumerate_opens - enumerate_closes) <= max_safe_imbalance:
         missing = enumerate_opens - enumerate_closes
-        latex_source = re.sub(r'\\end\{document\}', '\\end{enumerate}\n' * missing + '\\end{document}', latex_source, count=1)
+        if '\\end{document}' in latex_source:
+            latex_source = latex_source.replace('\\end{document}', '\\end{enumerate}\n' * missing + '\\end{document}', 1)
     
-    # Fix "Lonely \item" errors - remove \item commands that are outside list environments
-    # This is safer than trying to wrap them, as wrapping might break structure
-    # Pattern: \item that appears without a preceding \begin{itemize} or \begin{enumerate} nearby
-    parts = latex_source.split('\\begin{document}')
+    # Ensure \begin{document} still exists after all fixes
+    if '\\begin{document}' not in latex_source:
+        # Safety check - re-add if somehow removed
+        docclass_match = re.search(r'\\documentclass[^\n]*', latex_source)
+        if docclass_match:
+            insert_pos = docclass_match.end()
+            preamble_end = max(
+                latex_source.rfind('\\usepackage'),
+                latex_source.rfind('\\RequirePackage'),
+                latex_source.rfind('\\documentclass')
+            )
+            if preamble_end == -1:
+                preamble_end = insert_pos
+            else:
+                next_newline = latex_source.find('\n', preamble_end)
+                if next_newline != -1:
+                    preamble_end = next_newline + 1
+                else:
+                    preamble_end = len(latex_source)
+            latex_source = latex_source[:preamble_end] + '\n\\begin{document}\n' + latex_source[preamble_end:]
+        else:
+            latex_source = '\\documentclass{article}\n\\begin{document}\n' + latex_source
+    
+    # Fix "Lonely \item" errors - SAFE AUTO-FIX
+    # Try to wrap lonely \item commands in itemize environment if safe
+    # Only wrap if there's a clear pattern (multiple items together)
+    parts = latex_source.split('\\begin{document}', 1)  # Split only on first occurrence
     if len(parts) == 2:
         preamble, body = parts
         lines = body.split('\n')
@@ -722,41 +1119,374 @@ def fix_latex_before_compile(latex_source: str) -> str:
             
             # Check if this line has \item
             if '\\item' in line:
-                # Look back up to 5 lines for \begin{itemize} or \begin{enumerate}
+                # Look back up to 10 lines for \begin{itemize} or \begin{enumerate}
                 found_list_start = False
-                for j in range(max(0, i - 5), i):
-                    if '\\begin{itemize}' in lines[j] or '\\begin{enumerate}' in lines[j]:
+                lookback_start = max(0, i - 10)
+                for j in range(lookback_start, i):
+                    if '\\begin{itemize}' in lines[j] or '\\begin{enumerate}' in lines[j] or '\\begin{description}' in lines[j]:
                         found_list_start = True
                         break
                 
-                # Also check current line and next few lines for list start
+                # Also check if we're already inside a list (look for \end)
                 if not found_list_start:
-                    for j in range(i, min(len(lines), i + 3)):
-                        if '\\begin{itemize}' in lines[j] or '\\begin{enumerate}' in lines[j]:
-                            found_list_start = True
-                            break
+                    # Check if there's an \end before us
+                    for j in range(lookback_start, i):
+                        if '\\end{itemize}' in lines[j] or '\\end{enumerate}' in lines[j] or '\\end{description}' in lines[j]:
+                            # Check if there's a begin after this end
+                            has_begin_after = False
+                            for k in range(j + 1, i):
+                                if '\\begin{itemize}' in lines[k] or '\\begin{enumerate}' in lines[k] or '\\begin{description}' in lines[k]:
+                                    found_list_start = True
+                                    has_begin_after = True
+                                    break
+                            if not has_begin_after:
+                                break
                 
                 if not found_list_start:
-                    # This is a lonely \item - remove it (safer than wrapping)
-                    # Just skip this line
-                    i += 1
-                    continue
-            
-            fixed_lines.append(line)
+                    # Check if there are multiple \item commands nearby (safe to wrap)
+                    item_count = 0
+                    lookahead_end = min(len(lines), i + 5)
+                    for j in range(i, lookahead_end):
+                        if '\\item' in lines[j]:
+                            item_count += 1
+                    
+                    # Only wrap if there are at least 2 items together (safer pattern)
+                    if item_count >= 2:
+                        # Wrap in itemize - insert \begin{itemize} before first item
+                        # Check if we already inserted it
+                        if i == 0 or '\\begin{itemize}' not in lines[i-1]:
+                            fixed_lines.append('\\begin{itemize}')
+                        fixed_lines.append(line)
+                        # We'll close it later when we find non-item content
+                    else:
+                        # Single lonely item - remove it (safer than wrapping)
+                        i += 1
+                        continue
+                else:
+                    fixed_lines.append(line)
+            else:
+                # Not an item line
+                # If we have open itemize and this is not an item, close it
+                if fixed_lines and fixed_lines[-1].strip() and '\\item' not in line and '\\begin' not in line and '\\end' not in line:
+                    # Check if last line was an item
+                    if fixed_lines and '\\item' in fixed_lines[-1]:
+                        # Check if we need to close itemize
+                        # Look back to see if we opened one
+                        for j in range(len(fixed_lines) - 1, max(0, len(fixed_lines) - 10), -1):
+                            if '\\begin{itemize}' in fixed_lines[j]:
+                                # Check if we haven't closed it
+                                has_closed = False
+                                for k in range(j + 1, len(fixed_lines)):
+                                    if '\\end{itemize}' in fixed_lines[k]:
+                                        has_closed = True
+                                        break
+                                if not has_closed:
+                                    fixed_lines.append('\\end{itemize}')
+                                break
+                
+                fixed_lines.append(line)
             i += 1
+        
+        # Close any open itemize at the end
+        if fixed_lines:
+            itemize_count = sum(1 for line in fixed_lines if '\\begin{itemize}' in line)
+            itemize_end_count = sum(1 for line in fixed_lines if '\\end{itemize}' in line)
+            if itemize_count > itemize_end_count:
+                fixed_lines.append('\\end{itemize}')
         
         body = '\n'.join(fixed_lines)
         latex_source = preamble + '\\begin{document}' + body
     
-    # Fix undefined control sequences - remove or comment out problematic commands
-    # Common problematic patterns that cause "Undefined control sequence"
+    # Fix undefined control sequences - SAFE AUTO-FIX
+    # Only fix known problematic patterns that are safe to replace
     problematic_patterns = [
-        (r'\\resumesection', ''),  # Remove if undefined
-        (r'\\section\*\{([^}]+)\}', r'\\section{\1}'),  # Convert \section* to \section
+        (r'\\resumesection', ''),  # Remove if undefined (safe - just removes command)
+        (r'\\section\*\{([^}]+)\}', r'\\section{\1}'),  # Convert \section* to \section (safe)
     ]
     
     for pattern, replacement in problematic_patterns:
         latex_source = re.sub(pattern, replacement, latex_source)
+    
+    # Fix malformed \href commands that can cause "Too many }'s" errors
+    # Pattern: \href{url}{text} - detect and fix truncated or malformed hrefs
+    # Find \href commands that might be malformed (e.g., truncated URLs)
+    href_pattern = r'\\href\{([^}]*)\}(\{([^}]*)\})?'
+    
+    def fix_malformed_href(match):
+        url_part = match.group(1) or ''
+        text_part = match.group(3) if match.group(2) else ''
+        
+        # If URL is truncated (ends with ...) or very long, it might be malformed
+        # Check if URL has balanced braces
+        url_open = url_part.count('{') - url_part.count('\\{')
+        url_close = url_part.count('}') - url_part.count('\\}')
+        
+        # If URL has unbalanced braces or is truncated, replace with safe version
+        if url_open != url_close or url_part.endswith('...') or len(url_part) > 500:
+            # Replace malformed href with just the text (or URL if no text)
+            return text_part if text_part else url_part[:100]  # Truncate to safe length
+        
+        # If we have both URL and text, validate the structure
+        if text_part:
+            # Both parts exist - check if structure is valid
+            return match.group(0)  # Keep as-is if valid
+        else:
+            # Missing text part - add empty text to close the command
+            return f'\\href{{{url_part}}}{{}}'
+    
+    latex_source = re.sub(href_pattern, fix_malformed_href, latex_source)
+    
+    # Fix simple bracket imbalances
+    # Count braces and fix imbalances if small and safe
+    open_braces = latex_source.count('{') - latex_source.count('\\{')
+    close_braces = latex_source.count('}') - latex_source.count('\\}')
+    brace_imbalance = open_braces - close_braces
+    
+    # Handle "Too many }'s" error - remove extra closing braces if safe
+    if brace_imbalance < 0:
+        # Too many closing braces - this is the "Too many }'s" error
+        excess_closes = abs(brace_imbalance)
+        if excess_closes <= 3:  # Only fix small excesses (1-3)
+            # Remove excess closing braces from the end (before \end{document})
+            if '\\end{document}' in latex_source:
+                before_end = latex_source[:latex_source.rfind('\\end{document}')]
+                removed = 0
+                # Remove excess closing braces from right to left
+                for i in range(len(before_end) - 1, -1, -1):
+                    if before_end[i] == '}' and (i == 0 or before_end[i-1] != '\\'):
+                        before_end = before_end[:i] + before_end[i+1:]
+                        removed += 1
+                        if removed >= excess_closes:
+                            break
+                latex_source = before_end + '\\end{document}'
+    
+    # Handle missing closing braces - add them if safe
+    if 0 < brace_imbalance <= 2:
+        # Add missing closing braces at the end (before \end{document})
+        if '\\end{document}' in latex_source:
+            latex_source = latex_source.replace('\\end{document}', '}' * brace_imbalance + '\\end{document}', 1)
+    
+    # Final safety check: ensure \begin{document} and \end{document} exist
+    if '\\begin{document}' not in latex_source:
+        # Last resort: add minimal document structure
+        docclass_match = re.search(r'\\documentclass[^\n]*', latex_source)
+        if docclass_match:
+            insert_pos = docclass_match.end()
+            # Find a good insertion point (after last preamble command)
+            preamble_end = max(
+                latex_source.rfind('\\usepackage'),
+                latex_source.rfind('\\RequirePackage'),
+                latex_source.rfind('\\documentclass'),
+                latex_source.rfind('\n', 0, insert_pos + 500)
+            )
+            if preamble_end == -1:
+                preamble_end = insert_pos
+            else:
+                next_newline = latex_source.find('\n', preamble_end)
+                if next_newline != -1:
+                    preamble_end = next_newline + 1
+                else:
+                    preamble_end = len(latex_source)
+            latex_source = latex_source[:preamble_end] + '\n\\begin{document}\n' + latex_source[preamble_end:]
+        else:
+            latex_source = '\\documentclass{article}\n\\begin{document}\n' + latex_source
+    
+    # Ensure \end{document} exists (but only one)
+    # Count occurrences
+    begin_doc_count = latex_source.count('\\begin{document}')
+    end_doc_count = latex_source.count('\\end{document}')
+    
+    # If there are multiple \begin{document} or \end{document}, keep only the first/last
+    if begin_doc_count > 1:
+        # Keep only the first \begin{document}
+        first_begin = latex_source.find('\\begin{document}')
+        if first_begin != -1:
+            # Remove all other occurrences
+            latex_source = latex_source[:first_begin+len('\\begin{document}')] + \
+                          latex_source[first_begin+len('\\begin{document}'):].replace('\\begin{document}', '')
+    
+    if end_doc_count > 1:
+        # Keep only the last \end{document}
+        last_end = latex_source.rfind('\\end{document}')
+        if last_end != -1:
+            # Remove all other occurrences BEFORE the last one
+            before_last = latex_source[:last_end]
+            after_last = latex_source[last_end:]
+            # Remove all \end{document} from before_last
+            before_last = before_last.replace('\\end{document}', '')
+            latex_source = before_last + after_last
+            logger.warning("[fix_latex_before_compile] Removed %d duplicate \\end{document} tags (kept only the last one)", end_doc_count - 1)
+    
+    # Ensure \end{document} exists (only if missing)
+    if '\\end{document}' not in latex_source:
+        latex_source = latex_source + '\n\\end{document}'
+    
+    # Final pass: remove any remaining empty list environments and fix any remaining mismatches
+    # This is a safety net after all other fixes
+    def remove_empty_lists_final(match):
+        begin_env = match.group(1)
+        content = match.group(2)
+        end_env = match.group(3)
+        
+        # CRITICAL: Fix any remaining mismatches
+        if begin_env != end_env:
+            return f'\\begin{{{begin_env}}}{content}\\end{{{begin_env}}}'
+        
+        # Remove comments and whitespace
+        content_clean = re.sub(r'%.*', '', content).strip()
+        # Check for \item
+        if '\\item' not in content_clean:
+            # Only remove if content is very short (likely empty)
+            if len(content_clean) < 50:
+                return ''
+            else:
+                # Substantial content - keep it even without \item
+                logger.warning("[remove_empty_lists_final] List environment has content (%d chars) but no \\item - keeping structure", len(content_clean))
+                return match.group(0)  # Keep original
+        return match.group(0)
+    
+    # Final cleanup pass - also fixes mismatches
+    # CRITICAL: Do NOT use DOTALL - split by sections first
+    final_original_length = len(latex_source)
+    for iteration in range(3):  # Multiple passes for nested cases
+        old_source = latex_source
+        old_length = len(latex_source)
+        
+        # Split by sections to avoid matching across section boundaries
+        section_pattern = r'(\\section\*?\{[^}]+\})'
+        parts = re.split(section_pattern, latex_source)
+        
+        if len(parts) > 1:
+            # Process each section separately
+            processed_parts = []
+            for i, part in enumerate(parts):
+                if i % 2 == 0:
+                    # This is content between sections
+                    if part.strip():
+                        # Apply fix only within this section's content
+                        part = re.sub(
+                            r'\\begin\{((itemize|enumerate|description))\}(.*?)\\end\{((itemize|enumerate|description))\}',
+                            remove_empty_lists_final,
+                            part,
+                            flags=re.MULTILINE  # Use MULTILINE instead of DOTALL
+                        )
+                    processed_parts.append(part)
+                else:
+                    # This is a section header - keep as-is
+                    processed_parts.append(part)
+            latex_source = ''.join(processed_parts)
+        else:
+            # No sections found, apply fix normally
+            latex_source = re.sub(
+                r'\\begin\{((itemize|enumerate|description))\}(.*?)\\end\{((itemize|enumerate|description))\}',
+                remove_empty_lists_final,
+                latex_source,
+                flags=re.MULTILINE  # Use MULTILINE instead of DOTALL
+            )
+        
+        # Verify we didn't lose too much content
+        if len(latex_source) < old_length * 0.7:
+            logger.error("[fix_latex_before_compile] CRITICAL: remove_empty_lists_final removed too much content (%d -> %d chars) in iteration %d. Reverting.", 
+                        old_length, len(latex_source), iteration)
+            latex_source = old_source
+            break
+        
+        if old_source == latex_source:
+            break
+    
+    # Final check: if we lost more than 30% of content in final pass, something went wrong
+    if len(latex_source) < final_original_length * 0.7:
+        logger.error("[fix_latex_before_compile] CRITICAL: Final pass removed too much content (%d -> %d chars).", 
+                    final_original_length, len(latex_source))
+    
+    # Final safety check: fix any remaining mismatched environments
+    # This catches any that weren't caught by the above passes
+    latex_source = fix_mismatched_environments(latex_source)
+    
+    # CRITICAL FIX: Close any unclosed environments before \end{document}
+    # This prevents errors like "\begin{center} ended by \end{document}"
+    # BUT: Only close if there's exactly ONE \end{document} (duplicate removal should have run first)
+    def close_unclosed_environments(source):
+        """Close any unclosed \begin{...} environments before \end{document}."""
+        # CRITICAL: Only process if there's exactly one \end{document}
+        end_doc_count = source.count('\\end{document}')
+        if end_doc_count == 0:
+            return source
+        
+        if end_doc_count > 1:
+            logger.warning("[close_unclosed_environments] Multiple \\end{document} found (%d). Skipping environment closing to avoid corruption.", end_doc_count)
+            return source
+        
+        # Find the single \end{document} position (use rfind to be safe)
+        end_doc_pos = source.rfind('\\end{document}')
+        if end_doc_pos == -1:
+            return source
+        
+        # Only process content BEFORE the \end{document}
+        content_before_end = source[:end_doc_pos]
+        
+        # Find all \begin{env} and \end{env} in content before \end{document}
+        begin_pattern = r'\\begin\{([^}]+)\}'
+        end_pattern = r'\\end\{([^}]+)\}'
+        
+        begins = []
+        ends = []
+        
+        for match in re.finditer(begin_pattern, content_before_end):
+            env_name = match.group(1)
+            begins.append((env_name, match.start()))
+        
+        for match in re.finditer(end_pattern, content_before_end):
+            env_name = match.group(1)
+            ends.append((env_name, match.start()))
+        
+        # Build a stack to track open environments
+        env_stack = []
+        begin_map = {pos: name for name, pos in begins}
+        end_map = {pos: name for name, pos in ends}
+        
+        all_positions = sorted(set(begin_map.keys()) | set(end_map.keys()))
+        
+        for pos in all_positions:
+            if pos in begin_map:
+                env_name = begin_map[pos]
+                env_stack.append(env_name)
+            elif pos in end_map:
+                env_name = end_map[pos]
+                if env_stack and env_stack[-1] == env_name:
+                    env_stack.pop()
+                elif env_stack:
+                    # Mismatch - try to match by popping from stack
+                    found_match = False
+                    for i in range(len(env_stack) - 1, -1, -1):
+                        if env_stack[i] == env_name:
+                            env_stack = env_stack[:i] + env_stack[i+1:]
+                            found_match = True
+                            break
+                    if not found_match:
+                        # Extra closing - ignore
+                        pass
+        
+        # Close any remaining open environments before \end{document}
+        if env_stack:
+            # Build closing tags in reverse order (LIFO)
+            closing_tags = []
+            for env_name in reversed(env_stack):
+                closing_tags.append(f'\\end{{{env_name}}}')
+            
+            # Insert closing tags before \end{document}
+            closing_text = '\n' + '\n'.join(closing_tags) + '\n'
+            source = source[:end_doc_pos] + closing_text + source[end_doc_pos:]
+            logger.info("[close_unclosed_environments] Closed %d unclosed environments: %s", len(env_stack), env_stack)
+        
+        return source
+    
+    # CRITICAL: Run close_unclosed_environments AFTER duplicate removal
+    latex_source = close_unclosed_environments(latex_source)
+    
+    # FINAL SAFETY CHECK: Fix math mode one more time at the end
+    # This catches any math mode issues that might have been introduced by other fixes
+    latex_source = fix_math_mode(latex_source)
     
     return latex_source
 
@@ -801,7 +1531,26 @@ class LaTeXCompiler:
             Tuple of (success, log, pdf_path)
         """
         # Fix common LaTeX issues before compilation
+        logger.info("[LaTeX Compiler] LaTeX source length BEFORE fixes: %d chars", len(latex_source))
+        logger.info("[LaTeX Compiler] LaTeX source BEFORE fixes (first 3000 chars):\n%s", latex_source[:3000])
         latex_source = fix_latex_before_compile(latex_source)
+        logger.info("[LaTeX Compiler] LaTeX source length AFTER fixes: %d chars", len(latex_source))
+        
+        # Log full LaTeX source for debugging (first 2000 and last 500 chars)
+        logger.info("[LaTeX Compiler] LaTeX source preview (first 2000 chars):\n%s", latex_source[:2000])
+        logger.info("[LaTeX Compiler] LaTeX source preview (last 500 chars):\n%s", latex_source[-500:] if len(latex_source) > 500 else latex_source)
+        
+        # Check for document structure
+        has_begin_doc = '\\begin{document}' in latex_source
+        has_end_doc = '\\end{document}' in latex_source
+        begin_doc_count = latex_source.count('\\begin{document}')
+        end_doc_count = latex_source.count('\\end{document}')
+        logger.info("[LaTeX Compiler] Document structure check - begin{document}: %s (count: %d), end{document}: %s (count: %d)", 
+                   has_begin_doc, begin_doc_count, has_end_doc, end_doc_count)
+        
+        # Check for sections
+        section_count = len(re.findall(r'\\section\*?\{', latex_source))
+        logger.info("[LaTeX Compiler] Found %d section commands in LaTeX source", section_count)
         
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
@@ -815,8 +1564,10 @@ class LaTeXCompiler:
             
             # Write the LaTeX source
             tex_path = tmpdir_path / f"{filename}.tex"
+            logger.info("[LaTeX Compiler] Writing LaTeX source to: %s", tex_path)
             with open(tex_path, 'w', encoding='utf-8') as f:
                 f.write(latex_source)
+            logger.info("[LaTeX Compiler] LaTeX source written successfully (%d bytes)", tex_path.stat().st_size)
             
             log_content = ""
             
@@ -841,21 +1592,39 @@ class LaTeXCompiler:
                     
                     # Collect log
                     log_path = tmpdir_path / f"{filename}.log"
+                    logger.debug("[LaTeX Compiler] pdflatex run %d/%d completed (returncode: %d)", run + 1, compile_runs, result.returncode)
+                    
+                    # Log compilation output for debugging
+                    if result.stdout:
+                        # Extract important warnings/errors from stdout
+                        stdout_lines = result.stdout.split('\n')
+                        warnings = [line for line in stdout_lines if 'warning' in line.lower() or 'error' in line.lower() or 'overfull' in line.lower() or 'underfull' in line.lower()]
+                        if warnings:
+                            logger.warning("[LaTeX Compiler] pdflatex run %d/%d warnings/errors:\n%s", run + 1, compile_runs, '\n'.join(warnings[:20]))
+                    
+                    if result.stderr:
+                        logger.error("[LaTeX Compiler] pdflatex run %d/%d stderr:\n%s", run + 1, compile_runs, result.stderr[:1000])
                     if log_path.exists():
                         with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
                             log_content = f.read()
+                        logger.debug("[LaTeX Compiler] pdflatex run %d/%d completed (returncode: %d)", run + 1, compile_runs, result.returncode)
+                    else:
+                        logger.warning("[LaTeX Compiler] No log file found after pdflatex run %d/%d", run + 1, compile_runs)
                 
                 pdf_tmp_path = tmpdir_path / f"{filename}.pdf"
+                logger.info("[LaTeX Compiler] Checking for compiled PDF: %s", pdf_tmp_path)
                 
                 if result.returncode != 0 or not pdf_tmp_path.exists():
                     # Extract error messages
+                    logger.error("[LaTeX Compiler] Compilation failed (returncode: %d, PDF exists: %s)", 
+                               result.returncode, pdf_tmp_path.exists())
                     error_lines = []
                     for line in (result.stdout + result.stderr + log_content).split('\n'):
                         if line.startswith('!') or 'error' in line.lower():
                             error_lines.append(line)
                     
                     error_message = '\n'.join(error_lines[:10]) if error_lines else 'Unknown compilation error'
-                    logger.error("LaTeX compilation failed: %s", error_message[:200])
+                    logger.error("[LaTeX Compiler] LaTeX compilation failed: %s", error_message[:200])
                     
                     # Log more context around the error
                     if log_content:
@@ -884,7 +1653,9 @@ class LaTeXCompiler:
                 
                 # Copy PDF to output directory
                 final_pdf_path = output_dir / f"{filename}.pdf"
+                logger.info("[LaTeX Compiler] Copying PDF from temp directory to output directory: %s", final_pdf_path)
                 shutil.copy2(pdf_tmp_path, final_pdf_path)
+                logger.info("[LaTeX Compiler] PDF saved successfully. File size: %d bytes", final_pdf_path.stat().st_size)
                 
                 logger.info("LaTeX compilation successful: %s", final_pdf_path)
                 return True, log_content, final_pdf_path
@@ -1194,6 +1965,100 @@ async def generate_template_preview(template_id: str):
     }
 
 
+# =============================================================================
+# Helper Functions for Error Handling
+# =============================================================================
+
+def _parse_latex_errors(log: str) -> dict:
+    """
+    Parse LaTeX compilation log to extract error information.
+    
+    Returns:
+        Dictionary with error details
+    """
+    if not log:
+        return {"error_type": "UNKNOWN", "message": "No log available"}
+    
+    errors = []
+    lines = log.split('\n')
+    
+    for i, line in enumerate(lines):
+        if line.startswith('!'):
+            # LaTeX error line
+            error_msg = line[1:].strip()
+            
+            # Try to extract line number from next lines
+            line_number = None
+            char_offset = None
+            context_lines = []
+            
+            # Look ahead for line number
+            for j in range(i + 1, min(i + 10, len(lines))):
+                next_line = lines[j]
+                # Look for line number pattern: "l.123" or "l.123 " 
+                line_match = re.search(r'l\.(\d+)', next_line)
+                if line_match:
+                    line_number = int(line_match.group(1))
+                    context_lines.append(next_line)
+                    break
+                if next_line.strip() and not next_line.startswith('!'):
+                    context_lines.append(next_line)
+            
+            errors.append({
+                "error_type": "COMPILE_ERROR",
+                "message": error_msg,
+                "line_number": line_number,
+                "char_offset": char_offset,
+                "context": '\n'.join(context_lines[:5]) if context_lines else None
+            })
+    
+    # Common error patterns
+    if "Too many }'s" in log:
+        errors.append({
+            "error_type": "BRACKET_MISMATCH",
+            "message": "Too many closing braces",
+            "line_number": None,
+            "char_offset": None,
+            "context": None
+        })
+    
+    if "missing \\item" in log.lower() or "Something's wrong--perhaps a missing \\item" in log:
+        errors.append({
+            "error_type": "LIST_STRUCTURE_ERROR",
+            "message": "Missing \\item in list environment",
+            "line_number": None,
+            "char_offset": None,
+            "context": None
+        })
+    
+    if "Undefined control sequence" in log:
+        # Try to extract the undefined command
+        undefined_match = re.search(r'Undefined control sequence.*?\\\\([a-zA-Z@]+)', log)
+        if undefined_match:
+            cmd = undefined_match.group(1)
+            errors.append({
+                "error_type": "UNDEFINED_COMMAND",
+                "message": f"Undefined control sequence: \\{cmd}",
+                "line_number": None,
+                "char_offset": None,
+                "context": None
+            })
+    
+    if "Missing \\begin{document}" in log:
+        errors.append({
+            "error_type": "MISSING_DOCUMENT_STRUCTURE",
+            "message": "Missing \\begin{document}",
+            "line_number": None,
+            "char_offset": None,
+            "context": None
+        })
+    
+    return {
+        "errors": errors if errors else [{"error_type": "UNKNOWN", "message": "Compilation failed"}],
+        "error_count": len(errors) if errors else 1
+    }
+
+
 @app.post("/compile")
 async def compile_latex(request: CompileRequest):
     """
@@ -1201,52 +2066,126 @@ async def compile_latex(request: CompileRequest):
     
     Returns the compiled PDF file or an error with the compilation log.
     """
-    filename = request.filename or str(uuid.uuid4())
-    logger.info("Compiling LaTeX: %s", filename)
+    compilation_id = request.filename or str(uuid.uuid4())
+    logger.info("[LaTeX Service] Compiling LaTeX: %s", compilation_id)
+    logger.info("[LaTeX Service] LaTeX source length: %d chars", len(request.latex_source))
+    logger.debug("[LaTeX Service] LaTeX source preview (first 200 chars): %s", request.latex_source[:200])
     
     # Get template directory if specified
     template_dir = None
     compile_runs = 2
     if request.template_id:
+        logger.info("[LaTeX Service] Template ID specified: %s", request.template_id)
         template = template_manager.get_template(request.template_id)
         if template:
             template_dir = template_manager.get_template_dir(request.template_id)
             compile_runs = template.compile_runs
+            logger.info("[LaTeX Service] Using template directory: %s, compile_runs: %d", template_dir, compile_runs)
     
     # Validate LaTeX security
+    logger.info("[LaTeX Service] Validating LaTeX source for security (checking for forbidden commands)")
     if not template_manager._validate_latex_security(request.latex_source):
+        logger.error("[LaTeX Service] LaTeX security validation failed: forbidden commands detected")
         raise HTTPException(
             status_code=400,
             detail={
-                "success": False,
+                "code": "LATEX_VALIDATION_FAILED",
+                "compilation_id": compilation_id,
                 "error": "LaTeX source contains forbidden commands",
-                "log": ""
+                "details": {"error_type": "FORBIDDEN_COMMAND"},
+                "sample": request.latex_source[:1000] if len(request.latex_source) > 1000 else request.latex_source
+            }
+        )
+    
+    # Validate LaTeX source structure
+    logger.info("[LaTeX Service] Validating LaTeX source structure (brackets, environments, commands, etc.)")
+    validation_result = latex_validator.validate(request.latex_source)
+    
+    # Log validation metrics
+    if not validation_result.is_valid:
+        logger.warning(
+            "[LaTeX Service] LaTeX validation failed for compilation %s: %d errors",
+            compilation_id,
+            len(validation_result.errors)
+        )
+        # Log error categories
+        error_categories = {}
+        for error in validation_result.errors:
+            error_type = error.error_type.value
+            error_categories[error_type] = error_categories.get(error_type, 0) + 1
+        logger.warning("[LaTeX Service] Validation error categories: %s", error_categories)
+    else:
+        logger.info("[LaTeX Service] LaTeX validation passed")
+    
+    if not validation_result.is_valid:
+        # Format validation errors
+        error_details = []
+        for error in validation_result.errors:
+            error_details.append({
+                "error_type": error.error_type.value,
+                "message": error.message,
+                "line_number": error.line_number,
+                "char_offset": error.char_offset,
+                "context": error.context
+            })
+        
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "LATEX_VALIDATION_FAILED",
+                "compilation_id": compilation_id,
+                "error": "LaTeX validation failed",
+                "details": {
+                    "errors": error_details,
+                    "error_count": len(error_details)
+                },
+                "sample": request.latex_source[:1000] if len(request.latex_source) > 1000 else request.latex_source,
+                "message": "PDF generation failed due to template/content formatting. Contact support with ID " + compilation_id
             }
         )
     
     # Compile (fix_latex_before_compile is called inside compile method)
+    logger.info("[LaTeX Service] Starting LaTeX compilation process (compile_runs: %d)", compile_runs)
+    logger.info("[LaTeX Service] Output directory: %s, Filename: %s", OUTPUT_DIR, compilation_id)
     success, log, pdf_path = LaTeXCompiler.compile(
         latex_source=request.latex_source,
         output_dir=OUTPUT_DIR,
-        filename=filename,
+        filename=compilation_id,
         template_dir=template_dir,
         compile_runs=compile_runs
     )
     
+    # Log compilation metrics
+    if success:
+        logger.info("[LaTeX Service] LaTeX compilation successful: %s", compilation_id)
+        logger.info("[LaTeX Service] PDF saved at: %s", pdf_path)
+        if pdf_path and pdf_path.exists():
+            logger.info("[LaTeX Service] PDF file size: %d bytes", pdf_path.stat().st_size)
+    else:
+        logger.error("[LaTeX Service] LaTeX compilation failed: %s", compilation_id)
+        logger.error("[LaTeX Service] Compilation log length: %d chars", len(log) if log else 0)
+    
     if not success:
+        # Parse LaTeX compilation errors
+        error_details = _parse_latex_errors(log)
+        
         raise HTTPException(
             status_code=400,
             detail={
-                "success": False,
+                "code": "LATEX_COMPILE_ERROR",
+                "compilation_id": compilation_id,
                 "error": "LaTeX compilation failed",
-                "log": log[-5000:] if log else ""
+                "details": error_details,
+                "sample": request.latex_source[:1000] if len(request.latex_source) > 1000 else request.latex_source,
+                "log": log[-5000:] if log else "",
+                "message": "PDF generation failed due to template/content formatting. Contact support with ID " + compilation_id
             }
         )
     
     return FileResponse(
         path=str(pdf_path),
         media_type='application/pdf',
-        filename=f"{filename}.pdf"
+        filename=f"{compilation_id}.pdf"
     )
 
 
@@ -1264,6 +2203,8 @@ async def compile_with_profile(template_id: str, profile: dict):
     Returns:
         Compiled PDF
     """
+    compilation_id = str(uuid.uuid4())
+    
     template = template_manager.get_template(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
@@ -1278,25 +2219,79 @@ async def compile_with_profile(template_id: str, profile: dict):
     # Substitute placeholders
     latex_source = PlaceholderSubstitutor.substitute(template_content, profile)
     
-    # Generate unique filename
-    filename = str(uuid.uuid4())
+    # Validate LaTeX source structure
+    validation_result = latex_validator.validate(latex_source)
+    
+    # Log validation metrics
+    if not validation_result.is_valid:
+        logger.warning(
+            "LaTeX validation failed for compilation %s: %d errors",
+            compilation_id,
+            len(validation_result.errors)
+        )
+        # Log error categories
+        error_categories = {}
+        for error in validation_result.errors:
+            error_type = error.error_type.value
+            error_categories[error_type] = error_categories.get(error_type, 0) + 1
+        logger.info("Validation error categories: %s", error_categories)
+    
+    if not validation_result.is_valid:
+        # Format validation errors
+        error_details = []
+        for error in validation_result.errors:
+            error_details.append({
+                "error_type": error.error_type.value,
+                "message": error.message,
+                "line_number": error.line_number,
+                "char_offset": error.char_offset,
+                "context": error.context
+            })
+        
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "LATEX_VALIDATION_FAILED",
+                "compilation_id": compilation_id,
+                "error": "LaTeX validation failed",
+                "details": {
+                    "errors": error_details,
+                    "error_count": len(error_details)
+                },
+                "sample": latex_source[:1000] if len(latex_source) > 1000 else latex_source,
+                "message": "PDF generation failed due to template/content formatting. Contact support with ID " + compilation_id
+            }
+        )
     
     # Compile
     success, log, pdf_path = LaTeXCompiler.compile(
         latex_source=latex_source,
         output_dir=OUTPUT_DIR,
-        filename=filename,
+        filename=compilation_id,
         template_dir=template_dir,
         compile_runs=template.compile_runs
     )
     
+    # Log compilation metrics
+    if success:
+        logger.info("LaTeX compilation successful: %s", compilation_id)
+    else:
+        logger.error("LaTeX compilation failed: %s", compilation_id)
+    
     if not success:
+        # Parse LaTeX compilation errors
+        error_details = _parse_latex_errors(log)
+        
         raise HTTPException(
             status_code=400,
             detail={
-                "success": False,
+                "code": "LATEX_COMPILE_ERROR",
+                "compilation_id": compilation_id,
                 "error": "LaTeX compilation failed",
-                "log": log[-5000:] if log else ""
+                "details": error_details,
+                "sample": latex_source[:1000] if len(latex_source) > 1000 else latex_source,
+                "log": log[-5000:] if log else "",
+                "message": "PDF generation failed due to template/content formatting. Contact support with ID " + compilation_id
             }
         )
     
@@ -1305,6 +2300,45 @@ async def compile_with_profile(template_id: str, profile: dict):
         media_type='application/pdf',
         filename=f"{template.default_filename}.pdf"
     )
+
+
+@app.get("/download/{filename}")
+async def download_pdf(filename: str):
+    """
+    Download a previously compiled PDF.
+    
+    SECURITY: Validates filename is a valid UUID to prevent path traversal.
+    """
+    # Validate filename is a UUID to prevent path traversal attacks
+    try:
+        uuid.UUID(filename)
+    except ValueError:
+        logger.warning("Invalid filename format requested: %s", filename[:50])
+        raise HTTPException(status_code=400, detail="Invalid filename format")
+    
+    # Construct path safely
+    pdf_path = (OUTPUT_DIR / f"{filename}.pdf").resolve()
+    
+    # Verify the resolved path is within OUTPUT_DIR (defense in depth)
+    try:
+        pdf_path.relative_to(OUTPUT_DIR.resolve())
+    except ValueError:
+        logger.error("Path traversal attempt detected: %s", filename[:50])
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="PDF not found")
+    
+    return FileResponse(
+        path=str(pdf_path),
+        media_type='application/pdf',
+        filename=f"{filename}.pdf"
+    )
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8002)
 
 
 @app.get("/download/{filename}")

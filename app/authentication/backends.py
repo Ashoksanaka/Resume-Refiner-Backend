@@ -9,11 +9,74 @@ import logging
 from datetime import datetime, timedelta
 from django.conf import settings
 from django.utils import timezone
+from django.contrib.auth.backends import ModelBackend
 from rest_framework.authentication import BaseAuthentication, SessionAuthentication
 from rest_framework.exceptions import AuthenticationFailed
 from app.authentication.models import User
 
 logger = logging.getLogger(__name__)
+
+
+class EmailBackend(ModelBackend):
+    """
+    Custom Django authentication backend that authenticates users by email.
+    
+    This backend allows Django's authenticate() function to work with email
+    instead of username, which is required for the custom User model.
+    """
+    
+    def authenticate(self, request, username=None, password=None, **kwargs):
+        """
+        Authenticate a user by email and password.
+        
+        Args:
+            request: The request object
+            username: The email address (passed as 'username' parameter)
+            password: The password
+            **kwargs: Additional keyword arguments
+        
+        Returns:
+            User instance if authentication succeeds, None otherwise
+        """
+        if username is None:
+            username = kwargs.get('email')
+        
+        if username is None or password is None:
+            logger.debug("EmailBackend: Missing username or password")
+            return None
+        
+        try:
+            # Normalize email to lowercase
+            email = username.lower()
+            logger.debug(f"EmailBackend: Attempting to authenticate user with email: {email}")
+            user = User.objects.get(email=email)
+            logger.debug(f"EmailBackend: User found: {user.email}, is_active: {user.is_active}")
+        except User.DoesNotExist:
+            # Run the default password hasher once to reduce the timing
+            # difference between an existing and a non-existing user
+            logger.debug(f"EmailBackend: User not found for email: {email}")
+            User().set_password(password)
+            return None
+        
+        # Check password
+        password_valid = user.check_password(password)
+        can_authenticate = self.user_can_authenticate(user)
+        logger.debug(f"EmailBackend: Password valid: {password_valid}, can_authenticate: {can_authenticate}")
+        
+        if password_valid and can_authenticate:
+            logger.info(f"EmailBackend: Authentication successful for user: {user.email}")
+            return user
+        
+        logger.debug(f"EmailBackend: Authentication failed for user: {user.email}")
+        return None
+    
+    def user_can_authenticate(self, user):
+        """
+        Reject users with is_active=False. Custom user models that don't have
+        that attribute are allowed.
+        """
+        is_active = getattr(user, 'is_active', True)
+        return is_active
 
 
 class CsrfExemptSessionAuthentication(SessionAuthentication):

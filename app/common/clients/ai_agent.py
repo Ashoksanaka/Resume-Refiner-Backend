@@ -159,14 +159,15 @@ class AIAgentClient:
     The AI agent takes:
     - User profile (structured JSON)
     - Job description (raw text)
-    - LaTeX template
+    - LaTeX template (deprecated - no longer used, kept for backward compatibility)
     
     And returns:
-    - Customized LaTeX source
+    - Complete LaTeX source (generated from scratch)
     - List of modifications made
     
     CRITICAL RULES:
-    - AI CUSTOMIZES, it does NOT invent
+    - AI GENERATES complete LaTeX documents from scratch (no templates)
+    - AI CUSTOMIZES content, it does NOT invent
     - All output must be validated before use
     - Hallucinations cause hard failures
     """
@@ -184,13 +185,13 @@ class AIAgentClient:
         template_id: str
     ) -> AIGenerationResult:
         """
-        Request the AI agent to generate a customized resume.
+        Request the AI agent to generate a complete resume LaTeX document.
         
         Args:
             profile_data: User's profile data (validated JSON)
             job_description_text: Raw job description text
-            template_content: LaTeX template content
-            template_id: ID of the selected template
+            template_content: LaTeX template content (deprecated - no longer used, kept for backward compatibility)
+            template_id: ID for logging/identification purposes
         
         Returns:
             AIGenerationResult with LaTeX source and modifications
@@ -198,6 +199,9 @@ class AIAgentClient:
         Raises:
             AIServiceException: If the AI service fails
             ModelOutputInvalidException: If the output is invalid
+            
+        NOTE: The AI now generates complete LaTeX documents from scratch.
+        The template_content parameter is ignored but kept for API compatibility.
         """
         logger.info("[AI Agent Client] Called for template: %s", template_id)
         logger.debug("[AI Agent Client] Input profile keys: %s", list(profile_data.keys()))

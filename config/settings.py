@@ -107,6 +107,12 @@ DATABASES = {
 
 AUTH_USER_MODEL = 'authentication.User'
 
+# Custom authentication backend for email-based authentication
+AUTHENTICATION_BACKENDS = [
+    'app.authentication.backends.EmailBackend',
+    'django.contrib.auth.backends.ModelBackend',  # Fallback for admin
+]
+
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',

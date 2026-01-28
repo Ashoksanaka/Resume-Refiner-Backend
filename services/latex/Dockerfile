@@ -1,15 +1,29 @@
 # LaTeX Compilation Microservice Dockerfile
 FROM python:3.11-slim
 
-# Install TeX Live and PDF tools
+# Install comprehensive TeX Live packages for resume generation
+# This includes all commonly used packages without the full distribution
+# Packages included:
+# - Base LaTeX and recommended/extra packages (covers most resume needs)
+# - Font packages (for fontawesome5, custom fonts, etc.)
+# - Graphics packages (for images, diagrams)
+# - Publishing packages (for advanced formatting)
+# - Language support (for international characters)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     texlive-latex-base \
     texlive-latex-recommended \
-    texlive-fonts-recommended \
     texlive-latex-extra \
+    texlive-fonts-recommended \
     texlive-fonts-extra \
+    texlive-font-utils \
+    texlive-pictures \
+    texlive-publishers \
+    texlive-bibtex-extra \
+    texlive-lang-english \
+    texlive-lang-european \
     poppler-utils \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 WORKDIR /app
 

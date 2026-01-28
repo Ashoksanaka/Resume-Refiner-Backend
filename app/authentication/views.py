@@ -75,6 +75,14 @@ class SignupView(APIView):
     throttle_classes = [SignupThrottle]
     
     def post(self, request):
+        # Log incoming request data for debugging (without logging passwords)
+        request_data_copy = dict(request.data)
+        if 'password' in request_data_copy:
+            request_data_copy['password'] = '[REDACTED]'
+        if 'confirm_password' in request_data_copy:
+            request_data_copy['confirm_password'] = '[REDACTED]'
+        logger.info("Signup request received with fields: %s", list(request_data_copy.keys()))
+        
         # Check for duplicate email first (before serializer validation)
         email = request.data.get('email', '').lower()
         if email and User.objects.filter(email=email).exists():
@@ -84,6 +92,8 @@ class SignupView(APIView):
         
         if not serializer.is_valid():
             errors = serializer.errors
+            logger.warning("Signup validation failed. Errors: %s", errors)
+            logger.warning("Request data keys: %s", list(request.data.keys()))
             field_errors = []
             
             # Process field errors
@@ -100,16 +110,42 @@ class SignupView(APIView):
                                 raise EmailAlreadyRegisteredException()
                             elif 'invalid' in error_str or 'format' in error_str or 'valid' in error_str or 'enter a valid' in error_str:
                                 error_code = ErrorCode.INVALID_EMAIL_FORMAT
+                            elif 'required' in error_str:
+                                error_code = ErrorCode.INVALID_EMAIL_FORMAT
                         elif field == 'password':
-                            error_code = ErrorCode.PASSWORD_TOO_WEAK
+                            if 'required' in error_str:
+                                error_code = ErrorCode.PASSWORD_TOO_WEAK
+                            else:
+                                error_code = ErrorCode.PASSWORD_TOO_WEAK
                         elif field == 'confirm_password':
-                            error_code = ErrorCode.PASSWORD_MISMATCH
+                            if 'required' in error_str:
+                                error_code = ErrorCode.PASSWORD_MISMATCH
+                            else:
+                                error_code = ErrorCode.PASSWORD_MISMATCH
                         
                         if error_code:
                             field_errors.append({
                                 'field': field,
                                 'code': error_code
                             })
+                        else:
+                            # Fallback for unhandled errors - still add them with generic code
+                            if field in ['email', 'password', 'confirm_password']:
+                                if field == 'email':
+                                    field_errors.append({
+                                        'field': field,
+                                        'code': ErrorCode.INVALID_EMAIL_FORMAT
+                                    })
+                                elif field == 'password':
+                                    field_errors.append({
+                                        'field': field,
+                                        'code': ErrorCode.PASSWORD_TOO_WEAK
+                                    })
+                                elif field == 'confirm_password':
+                                    field_errors.append({
+                                        'field': field,
+                                        'code': ErrorCode.PASSWORD_MISMATCH
+                                    })
                 
                 # Handle dict errors (for nested validation errors)
                 elif isinstance(field_error_list, dict):
@@ -117,6 +153,12 @@ class SignupView(APIView):
                         field_errors.append({
                             'field': 'confirm_password',
                             'code': ErrorCode.PASSWORD_MISMATCH
+                        })
+                    else:
+                        # Handle other dict errors
+                        field_errors.append({
+                            'field': field,
+                            'code': ErrorCode.INVALID_PAYLOAD
                         })
                 
                 # Handle string errors
@@ -140,6 +182,20 @@ class SignupView(APIView):
                             'field': field,
                             'code': ErrorCode.PASSWORD_MISMATCH
                         })
+                    else:
+                        # Handle any other field errors
+                        field_errors.append({
+                            'field': field,
+                            'code': ErrorCode.INVALID_PAYLOAD
+                        })
+            
+            # Ensure we have at least one error
+            if not field_errors:
+                # If no specific field errors were identified, add a generic one
+                field_errors.append({
+                    'field': 'non_field_errors',
+                    'code': ErrorCode.INVALID_PAYLOAD
+                })
             
             # Return structured validation errors
             raise InvalidPayloadException(

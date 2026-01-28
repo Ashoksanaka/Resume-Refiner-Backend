@@ -3,10 +3,12 @@ Celery tasks for resume generation.
 
 These tasks handle the async processing of resume generation:
 1. Get profile snapshot and job description
-2. Call AI agent for LaTeX generation
+2. Call AI agent for LaTeX generation (AI generates complete LaTeX from scratch)
 3. Validate AI output for hallucinations
 4. Compile LaTeX to PDF
 5. Update generation request status
+
+NOTE: Templates are no longer used - the AI generates complete LaTeX documents from scratch.
 """
 
 import logging
@@ -77,8 +79,8 @@ def process_resume_generation(self, generation_id: str):
     generation_request.mark_processing()
     
     try:
-        # Get main template content from LaTeX service
-        # All resumes are generated from main.tex
+        # NOTE: Template fetching is deprecated - AI now generates LaTeX from scratch
+        # Template content is still fetched and passed for backward compatibility but is ignored by the AI agent
         logger.info("[PDF Generation] Initializing LaTeX service client")
         latex_client = LaTeXServiceClient()
         
@@ -87,12 +89,13 @@ def process_resume_generation(self, generation_id: str):
         asyncio.set_event_loop(loop)
         
         try:
-            # Get main template content from LaTeX service
-            logger.info("[PDF Generation] Fetching main template content from LaTeX service")
+            # Get template content (deprecated - kept for backward compatibility)
+            # The AI agent no longer uses templates - it generates complete LaTeX from scratch
+            logger.info("[PDF Generation] Fetching template content (deprecated - kept for API compatibility)")
             template_content = loop.run_until_complete(
                 latex_client.get_main_template_content()
             )
-            logger.info("[PDF Generation] Template content received (length: %d chars)", len(template_content))
+            logger.info("[PDF Generation] Template content received (length: %d chars) - NOTE: Not used by AI", len(template_content))
         finally:
             loop.close()
         
@@ -119,13 +122,13 @@ def process_resume_generation(self, generation_id: str):
         asyncio.set_event_loop(loop)
         
         try:
-            logger.info("[PDF Generation] Calling AI agent to customize LaTeX template")
+            logger.info("[PDF Generation] Calling AI agent to generate complete LaTeX document")
             ai_result = loop.run_until_complete(
                 ai_client.generate_resume(
                     profile_data=generation_request.profile_snapshot,
                     job_description_text=generation_request.job_description.text,
-                    template_content=template_content,
-                    template_id='main',  # Use 'main' as template identifier
+                    template_content=template_content,  # Deprecated - ignored by AI agent
+                    template_id='main',  # Used for logging/identification only
                 )
             )
             logger.info("[PDF Generation] AI agent response received. LaTeX source length: %d chars", len(ai_result.latex_source))

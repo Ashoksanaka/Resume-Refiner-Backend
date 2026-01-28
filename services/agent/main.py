@@ -1,12 +1,14 @@
 """AI Agent Microservice for Resume AI Platform.
 
-This service handles resume customization using Google's Gemini API.
-It takes a user profile and job description, then generates customized LaTeX.
+This service handles resume generation using Google's Gemini API.
+It takes a user profile and job description, then generates complete LaTeX documents from scratch.
 
 CRITICAL RULES:
+- The AI GENERATES complete LaTeX documents (no templates are used)
 - The AI CUSTOMIZES content, it does NOT invent
 - All company names, institutions, dates must come from the profile
 - The output must be valid LaTeX that compiles
+- The output must be ATS-friendly (single-column, simple layout)
 
 SECURITY:
 - User inputs are sanitized to prevent prompt injection
@@ -134,11 +136,16 @@ def sanitize_profile_for_latex(profile: dict) -> dict:
 
 
 class GenerationRequest(BaseModel):
-    """Request model for resume generation."""
+    """Request model for resume generation.
+    
+    NOTE: The 'template' field is deprecated and no longer used.
+    The AI now generates complete LaTeX documents from scratch.
+    The field is kept for backward compatibility but is ignored.
+    """
     profile: dict
     job_description: str
-    template: str
-    template_id: str
+    template: str  # Deprecated: no longer used, kept for backward compatibility
+    template_id: str  # Used for logging/identification only
     
     @field_validator('job_description')
     @classmethod
@@ -543,7 +550,10 @@ def fix_latex_issues(latex_source: str) -> str:
 @app.post("/generate", response_model=GenerationResponse)
 async def generate_resume(request: GenerationRequest):
     """
-    Generate a customized resume using Gemini.
+    Generate a complete resume LaTeX document using Gemini.
+    
+    The AI generates the entire LaTeX document from scratch - no templates are used.
+    The output is a complete, compile-ready LaTeX document with ATS-friendly formatting.
     
     Security measures:
     - Job description is sanitized against prompt injection
@@ -553,6 +563,8 @@ async def generate_resume(request: GenerationRequest):
     CRITICAL: This endpoint must NEVER return hallucinated content.
     All validation failures result in HTTP 500 errors that the backend
     should handle appropriately.
+    
+    NOTE: The 'template' field in the request is deprecated and ignored.
     """
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY is not configured")
@@ -586,9 +598,9 @@ async def generate_resume(request: GenerationRequest):
         
         # Build the prompt with clear structure and strict instructions
         # Use delimiters to separate user content from instructions
+        # NOTE: Templates are no longer used - AI generates complete LaTeX from scratch
         logger.info("[AI Agent Service] Building prompt for Gemini API")
         logger.debug("[AI Agent Service] System prompt length: %d chars", len(SYSTEM_PROMPT))
-        logger.debug("[AI Agent Service] Template content length: %d chars", len(request.template))
         
         prompt = f"""{SYSTEM_PROMPT}
 
@@ -601,22 +613,6 @@ async def generate_resume(request: GenerationRequest):
 === END CANDIDATE PROFILE ===
 
 🚨🚨🚨 FINAL CRITICAL REMINDER BEFORE GENERATING 🚨🚨🚨
-        
-        # Log prompt summary for debugging
-        logger.info("[AI Agent Service] Prompt summary - System prompt: %d chars, JD: %d chars, Profile JSON: %d chars, Total: %d chars", 
-                   len(SYSTEM_PROMPT), len(safe_jd), len(profile_json), len(prompt))
-        logger.debug("[AI Agent Service] Profile JSON preview (first 500 chars): %s", profile_json[:500])
-        logger.debug("[AI Agent Service] Profile JSON preview (last 500 chars): %s", profile_json[-500:] if len(profile_json) > 500 else profile_json)
-        
-        # Verify profile data contains expected sections
-        if 'experience' in safe_profile and safe_profile['experience']:
-            logger.info("[AI Agent Service] Profile contains %d experience entries", len(safe_profile['experience']))
-            logger.debug("[AI Agent Service] First experience entry: %s", str(safe_profile['experience'][0])[:200])
-        if 'education' in safe_profile and safe_profile['education']:
-            logger.info("[AI Agent Service] Profile contains %d education entries", len(safe_profile['education']))
-        if 'skills' in safe_profile and safe_profile['skills']:
-            logger.info("[AI Agent Service] Profile contains %d skills", len(safe_profile['skills']))
-            logger.debug("[AI Agent Service] Skills list: %s", str(safe_profile['skills'])[:200])
 
 YOU ARE ABOUT TO GENERATE THE RESUME. FOLLOW THESE STEPS EXACTLY:
 
@@ -708,6 +704,22 @@ Keep generating LaTeX code until you have written \end{{document}}.
    Double-check every company name, institution, certification, skill, AND LaTeX command before outputting.
 
 Generate the LaTeX resume now:"""
+        
+        # Log prompt summary for debugging
+        logger.info("[AI Agent Service] Prompt summary - System prompt: %d chars, JD: %d chars, Profile JSON: %d chars, Total: %d chars", 
+                   len(SYSTEM_PROMPT), len(safe_jd), len(profile_json), len(prompt))
+        logger.debug("[AI Agent Service] Profile JSON preview (first 500 chars): %s", profile_json[:500])
+        logger.debug("[AI Agent Service] Profile JSON preview (last 500 chars): %s", profile_json[-500:] if len(profile_json) > 500 else profile_json)
+        
+        # Verify profile data contains expected sections
+        if 'experience' in safe_profile and safe_profile['experience']:
+            logger.info("[AI Agent Service] Profile contains %d experience entries", len(safe_profile['experience']))
+            logger.debug("[AI Agent Service] First experience entry: %s", str(safe_profile['experience'][0])[:200])
+        if 'education' in safe_profile and safe_profile['education']:
+            logger.info("[AI Agent Service] Profile contains %d education entries", len(safe_profile['education']))
+        if 'skills' in safe_profile and safe_profile['skills']:
+            logger.info("[AI Agent Service] Profile contains %d skills", len(safe_profile['skills']))
+            logger.debug("[AI Agent Service] Skills list: %s", str(safe_profile['skills'])[:200])
 
         # Use environment variable for model name, with fallback to stable model
         # Available models: gemini-2.0-flash, gemini-2.5-flash, gemini-pro-latest, gemini-flash-latest

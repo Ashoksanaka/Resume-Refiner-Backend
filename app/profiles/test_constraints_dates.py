@@ -36,6 +36,21 @@ def minimal_profile_data():
     }
 
 
+EXPERIENCE_DESCRIPTION = 'Led development of key platform features.'
+
+VALID_EDUCATION = {
+    'institution': 'State University',
+    'degree_level': "Bachelor's",
+    'course': 'BSc',
+    'specialization': 'Computer Science',
+    'location': 'California, United States',
+    'grade_type': 'cgpa',
+    'grade_value': 8.5,
+    'start_date': '2012-08-01',
+    'end_date': '2016-05-20',
+}
+
+
 @pytest.mark.django_db
 class TestDateConstraints:
     """Tests for date validation constraints."""
@@ -52,7 +67,8 @@ class TestDateConstraints:
                 'experience': [{
                     'company': 'Tech Corp',
                     'title': 'Engineer',
-                    'start_date': future_date
+                    'start_date': future_date,
+                    'description': EXPERIENCE_DESCRIPTION,
                 }]
             },
             format='json'
@@ -74,7 +90,8 @@ class TestDateConstraints:
                     'company': 'Tech Corp',
                     'title': 'Engineer',
                     'start_date': past_date,
-                    'end_date': future_date
+                    'end_date': future_date,
+                    'description': EXPERIENCE_DESCRIPTION,
                 }]
             },
             format='json'
@@ -96,7 +113,8 @@ class TestDateConstraints:
                     'company': 'Tech Corp',
                     'title': 'Engineer',
                     'start_date': start_date,
-                    'end_date': end_date
+                    'end_date': end_date,
+                    'description': EXPERIENCE_DESCRIPTION,
                 }]
             },
             format='json'
@@ -109,12 +127,11 @@ class TestDateConstraints:
         future_date = (date.today() + timedelta(days=30)).isoformat()
         
         api_client.force_authenticate(user=verified_user)
-        response = api_client.put(
+        response = api_client.patch(
             '/api/v1/profiles/me',
             {
-                **minimal_profile_data,
                 'projects': [{
-                    'id': 'project-id',
+                    'id': '550e8400-e29b-41d4-a716-446655440001',
                     'title': 'Future Project',
                     'role': 'Developer',
                     'start_date': future_date,
@@ -137,7 +154,7 @@ class TestDateConstraints:
             {
                 **minimal_profile_data,
                 'projects': [{
-                    'id': 'project-id',
+                    'id': '550e8400-e29b-41d4-a716-446655440002',
                     'title': 'Future Project',
                     'role': 'Developer',
                     'start_date': future_date,
@@ -155,6 +172,48 @@ class TestDateConstraints:
         end_date = '2022-12-31'
         
         api_client.force_authenticate(user=verified_user)
+        response = api_client.patch(
+            '/api/v1/profiles/me',
+            {
+                'experience': [{
+                    'company': 'Tech Corp',
+                    'title': 'Engineer',
+                    'start_date': start_date,
+                    'end_date': end_date,
+                    'description': EXPERIENCE_DESCRIPTION,
+                }]
+            },
+            format='json'
+        )
+        
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_current_experience_with_null_end_date_accepted(
+        self, api_client, verified_user, minimal_profile_data
+    ):
+        """Test that current roles with null end_date are accepted."""
+        api_client.force_authenticate(user=verified_user)
+        response = api_client.patch(
+            '/api/v1/profiles/me',
+            {
+                'experience': [{
+                    'company': 'Tech Corp',
+                    'title': 'Engineer',
+                    'start_date': '2020-01-01',
+                    'end_date': None,
+                    'description': EXPERIENCE_DESCRIPTION,
+                }]
+            },
+            format='json'
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_experience_missing_description_rejected(
+        self, api_client, verified_user, minimal_profile_data
+    ):
+        """Test that experience without description is rejected."""
+        api_client.force_authenticate(user=verified_user)
         response = api_client.put(
             '/api/v1/profiles/me',
             {
@@ -162,14 +221,14 @@ class TestDateConstraints:
                 'experience': [{
                     'company': 'Tech Corp',
                     'title': 'Engineer',
-                    'start_date': start_date,
-                    'end_date': end_date
+                    'start_date': '2020-01-01',
+                    'end_date': '2022-12-31',
                 }]
             },
             format='json'
         )
-        
-        assert response.status_code == status.HTTP_200_OK
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
     
     def test_career_break_date_validation(self, api_client, verified_user, minimal_profile_data):
         """Test career break date validation."""
@@ -190,3 +249,64 @@ class TestDateConstraints:
         )
         
         assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_valid_education_with_new_fields_accepted(
+        self, api_client, verified_user, minimal_profile_data
+    ):
+        api_client.force_authenticate(user=verified_user)
+        response = api_client.patch(
+            '/api/v1/profiles/me',
+            {'education': [VALID_EDUCATION]},
+            format='json'
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_education_missing_grade_rejected(
+        self, api_client, verified_user, minimal_profile_data
+    ):
+        invalid_education = VALID_EDUCATION.copy()
+        invalid_education.pop('grade_value')
+
+        api_client.force_authenticate(user=verified_user)
+        response = api_client.patch(
+            '/api/v1/profiles/me',
+            {'education': [invalid_education]},
+            format='json'
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_education_cgpa_out_of_range_rejected(
+        self, api_client, verified_user, minimal_profile_data
+    ):
+        api_client.force_authenticate(user=verified_user)
+        response = api_client.patch(
+            '/api/v1/profiles/me',
+            {
+                'education': [{
+                    **VALID_EDUCATION,
+                    'grade_value': 11,
+                }]
+            },
+            format='json'
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_current_education_with_null_end_date_accepted(
+        self, api_client, verified_user, minimal_profile_data
+    ):
+        api_client.force_authenticate(user=verified_user)
+        response = api_client.patch(
+            '/api/v1/profiles/me',
+            {
+                'education': [{
+                    **VALID_EDUCATION,
+                    'end_date': None,
+                }]
+            },
+            format='json'
+        )
+
+        assert response.status_code == status.HTTP_200_OK

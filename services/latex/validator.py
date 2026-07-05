@@ -141,6 +141,19 @@ class LaTeXValidator:
         'amsmath', 'amssymb', 'graphicx', 'pdfpages',
     }
     
+    def _mask_latex_comments(self, source: str) -> str:
+        """Replace comment text with spaces so structure checks ignore commented tokens."""
+        chars = list(source)
+        i = 0
+        while i < len(chars):
+            if chars[i] == '%' and (i == 0 or chars[i - 1] != '\\'):
+                while i < len(chars) and chars[i] != '\n':
+                    chars[i] = ' '
+                    i += 1
+            else:
+                i += 1
+        return ''.join(chars)
+    
     def validate(self, source: str) -> ValidationResult:
         """
         Validate LaTeX source code.
@@ -173,6 +186,10 @@ class LaTeXValidator:
         doc_error = self._check_document_structure(source)
         if doc_error:
             errors.append(doc_error)
+
+        preamble_error = self._check_preamble_display_math(source)
+        if preamble_error:
+            errors.append(preamble_error)
         
         # 5. Check for forbidden commands
         forbidden_errors = self._check_forbidden_commands(source, lines)
@@ -244,6 +261,7 @@ class LaTeXValidator:
     def _check_environment_balance(self, source: str, lines: List[str]) -> List[ValidationError]:
         """Check if \begin{...} and \end{...} environments are balanced and matched."""
         errors: List[ValidationError] = []
+        structure_source = self._mask_latex_comments(source)
         
         # Find all \begin{env} and \end{env}
         begin_pattern = r'\\begin\{([^}]+)\}'
@@ -252,12 +270,12 @@ class LaTeXValidator:
         begins = []
         ends = []
         
-        for match in re.finditer(begin_pattern, source):
+        for match in re.finditer(begin_pattern, structure_source):
             env_name = match.group(1)
             line_num, char_offset = self._get_line_position(source, match.start())
             begins.append((env_name, match.start(), line_num, char_offset))
         
-        for match in re.finditer(end_pattern, source):
+        for match in re.finditer(end_pattern, structure_source):
             env_name = match.group(1)
             line_num, char_offset = self._get_line_position(source, match.start())
             ends.append((env_name, match.start(), line_num, char_offset))
@@ -471,9 +489,10 @@ class LaTeXValidator:
     
     def _check_document_structure(self, source: str) -> Optional[ValidationError]:
         """Check for required document structure."""
-        has_documentclass = bool(re.search(r'\\documentclass', source))
-        has_begin_document = bool(re.search(r'\\begin\{document\}', source))
-        has_end_document = bool(re.search(r'\\end\{document\}', source))
+        structure_source = self._mask_latex_comments(source)
+        has_documentclass = bool(re.search(r'\\documentclass', structure_source))
+        has_begin_document = bool(re.search(r'\\begin\{document\}', structure_source))
+        has_end_document = bool(re.search(r'\\end\{document\}', structure_source))
         
         if not has_documentclass:
             return ValidationError(
@@ -502,6 +521,30 @@ class LaTeXValidator:
                 context=None
             )
         
+        return None
+    
+    def _check_preamble_display_math(self, source: str) -> Optional[ValidationError]:
+        """Detect display-math `\[` in the preamble (common AI macro corruption)."""
+        begin_doc = source.find("\\begin{document}")
+        if begin_doc == -1:
+            preamble = source
+        else:
+            preamble = source[:begin_doc]
+
+        masked = self._mask_latex_comments(preamble)
+        for match in re.finditer(r"(?<!\\)\\\[", masked):
+            line_num, char_offset = self._get_line_position(source, match.start())
+            context = self._get_context(source, match.start(), 60)
+            return ValidationError(
+                error_type=ValidationErrorType.MISSING_DOCUMENT_STRUCTURE,
+                message=(
+                    "Preamble contains display math (\\[). "
+                    "Use \\\\[ line breaks in resumeEntryHeading, not \\[."
+                ),
+                line_number=line_num,
+                char_offset=char_offset,
+                context=context,
+            )
         return None
     
     def _check_forbidden_commands(self, source: str, lines: List[str]) -> List[ValidationError]:
@@ -539,7 +582,7 @@ class LaTeXValidator:
         # Find \newcommand, \renewcommand, \providecommand definitions
         command_def_pattern = r'\\(?:new|renew|provide)command\*?(?:\[[^\]]*\])?\{([^}]+)\}'
         for match in re.finditer(command_def_pattern, source):
-            cmd_name = match.group(1)
+            cmd_name = match.group(1).lstrip('\\')
             defined_commands.add(cmd_name)
         
         # Find \def definitions
@@ -593,8 +636,12 @@ class LaTeXValidator:
             'resumeSubItem', 'resumeSubHeadingListStart', 'resumeSubHeadingListEnd',
             'resumeItemListStart', 'resumeItemListEnd', 'resumesection',  # Common template command
             'myuline', 'texteb', 'ebseries',  # From main template
-            'FullName', 'Email', 'Phone', 'Address', 'LinkedIn', 'GitHub', 'Website', 'ProfilePhoto',  # From ATS template
-            # AI agent sometimes generates these (should use \section* instead, but whitelist to prevent false positives)
+            'FullName', 'Email', 'Phone', 'Address', 'LinkedIn', 'GitHub', 'Website', 'ProfilePhoto',  # Legacy ATS placeholders
+            # Current ATS template macros (services/latex/templates/main/resume_template.tex)
+            'resumeHeader', 'resumeContactLine',             'resumeSectionTitle', 'resumeSummaryText',
+            'resumeExperienceHeading', 'resumeEducationEntry', 'resumeProjectEntry',
+            'resumeSkillLine', 'resumeDetailLine', 'resumeEntryHeading', 'resumeTagList',
+            # AI agent sometimes generates these (legacy; prefer \resumeSectionTitle)
             'sectiontitle', 'sectionTitle', 'SectionTitle',
         }
         

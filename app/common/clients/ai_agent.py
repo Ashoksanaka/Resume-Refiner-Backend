@@ -11,6 +11,7 @@ SECURITY:
 
 import logging
 import re
+import time
 from typing import Optional
 from dataclasses import dataclass
 import httpx
@@ -157,16 +158,17 @@ class AIAgentClient:
     Client for the AI Agent microservice.
     
     The AI agent takes:
-    - User profile (structured JSON)
+    - User profile (structured JSON, filtered to selected sections)
     - Job description (raw text)
-    - LaTeX template (deprecated - no longer used, kept for backward compatibility)
+    - LaTeX ATS reference template (resume_template.tex)
+    - Selected profile section keys
     
     And returns:
-    - Complete LaTeX source (generated from scratch)
+    - Personalized LaTeX based on the fixed ATS template
     - List of modifications made
     
     CRITICAL RULES:
-    - AI GENERATES complete LaTeX documents from scratch (no templates)
+    - AI customizes the provided LaTeX template (does not invent structure)
     - AI CUSTOMIZES content, it does NOT invent
     - All output must be validated before use
     - Hallucinations cause hard failures
@@ -174,7 +176,6 @@ class AIAgentClient:
     
     def __init__(self):
         self.base_url = getattr(settings, 'AI_AGENT_URL', 'http://localhost:8001')
-        # Set timeout to at least 180 seconds to account for Gemini API latency (120s) + processing time
         self.timeout = getattr(settings, 'AI_AGENT_TIMEOUT', 180)
     
     async def generate_resume(
@@ -182,28 +183,27 @@ class AIAgentClient:
         profile_data: dict,
         job_description_text: str,
         template_content: str,
-        template_id: str
+        template_id: str,
+        selected_sections: list[str],
     ) -> AIGenerationResult:
         """
-        Request the AI agent to generate a complete resume LaTeX document.
-        
+        Request the AI agent to customize the resume LaTeX template.
+
         Args:
-            profile_data: User's profile data (validated JSON)
+            profile_data: Filtered profile data for selected sections
             job_description_text: Raw job description text
-            template_content: LaTeX template content (deprecated - no longer used, kept for backward compatibility)
-            template_id: ID for logging/identification purposes
-        
+            template_content: ATS reference LaTeX template (resume_template.tex)
+            template_id: Template identifier (e.g. 'main')
+            selected_sections: Profile section keys the user selected
+
         Returns:
             AIGenerationResult with LaTeX source and modifications
-        
-        Raises:
-            AIServiceException: If the AI service fails
-            ModelOutputInvalidException: If the output is invalid
-            
-        NOTE: The AI now generates complete LaTeX documents from scratch.
-        The template_content parameter is ignored but kept for API compatibility.
         """
-        logger.info("[AI Agent Client] Called for template: %s", template_id)
+        logger.info(
+            "[AI Agent Client] Called for template: %s, sections: %s",
+            template_id,
+            selected_sections,
+        )
         logger.debug("[AI Agent Client] Input profile keys: %s", list(profile_data.keys()))
         logger.debug("[AI Agent Client] Job description length: %d chars", len(job_description_text))
         logger.debug("[AI Agent Client] Template content length: %d chars", len(template_content))
@@ -233,7 +233,9 @@ class AIAgentClient:
             logger.debug("[AI Agent Client] Request payload size: profile=%d bytes, job_description=%d bytes, template=%d bytes",
                         len(str(safe_profile_data)), len(job_description_text), len(template_content))
             
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            request_started = time.monotonic()
+            timeout = httpx.Timeout(self.timeout, connect=30.0)
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
                     f"{self.base_url}/generate",
                     json={
@@ -241,6 +243,7 @@ class AIAgentClient:
                         "job_description": job_description_text,
                         "template": template_content,
                         "template_id": template_id,
+                        "selected_sections": selected_sections,
                     }
                 )
                 logger.info("[AI Agent Client] Received response from AI agent service (status: %d)", response.status_code)
@@ -304,7 +307,12 @@ class AIAgentClient:
             )
             
         except httpx.TimeoutException:
-            logger.error("AI agent request timed out")
+            elapsed = time.monotonic() - request_started
+            logger.error(
+                "AI agent request timed out after %.1fs (limit=%ss)",
+                elapsed,
+                self.timeout,
+            )
             raise AIServiceException("AI service timed out. Please try again.")
         except httpx.HTTPError as e:
             logger.error("AI agent HTTP error: %s", str(e))

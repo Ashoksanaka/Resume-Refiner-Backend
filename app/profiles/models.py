@@ -82,3 +82,34 @@ class Profile(models.Model):
     def certifications(self):
         """Convenience accessor for certifications section."""
         return self.data.get('certifications', [])
+
+
+class ProfileSaveEvent(models.Model):
+    """
+    Records profile section save events for dashboard history.
+    """
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='profile_save_events'
+    )
+    sections = models.JSONField(
+        help_text='Top-level profile section keys saved in this event'
+    )
+    saved_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'profile_save_events'
+        ordering = ['-saved_at']
+        indexes = [
+            models.Index(fields=['user', '-saved_at']),
+        ]
+
+    def __str__(self):
+        return f"ProfileSaveEvent({self.user.email}, {self.sections})"

@@ -7,11 +7,43 @@ Business logic for:
 """
 
 import logging
-from app.profiles.models import Profile
+from app.profiles.models import Profile, ProfileSaveEvent
 from app.authentication.models import User
 from app.common.exceptions import ResourceNotFoundException
 
 logger = logging.getLogger(__name__)
+
+SECTION_LABELS = {
+    'personalInfo': 'Personal Info',
+    'summary': 'Summary',
+    'experience': 'Experience',
+    'education': 'Education',
+    'skills': 'Skills',
+    'certifications': 'Certifications',
+    'projects': 'Projects',
+    'achievements': 'Achievements',
+    'publications': 'Publications',
+    'patents': 'Patents',
+    'volunteering': 'Volunteering',
+    'licenses': 'Licenses',
+    'trainings': 'Trainings',
+    'test_scores': 'Test Scores',
+    'languages': 'Languages',
+    'organizations': 'Organizations',
+    'positions': 'Positions',
+    'career_breaks': 'Career Breaks',
+    'areas_of_interest': 'Areas of Interest',
+    'hobbies': 'Hobbies',
+}
+
+
+def build_save_event_label(sections: list[str]) -> str:
+    """Build a human-readable label for saved profile sections."""
+    labels = [
+        SECTION_LABELS.get(section, section.replace('_', ' ').title())
+        for section in sections
+    ]
+    return f"Updated {', '.join(labels)}"
 
 
 class ProfileService:
@@ -85,6 +117,43 @@ class ProfileService:
         logger.info("Profile %s for user: %s", action, user.id)
         
         return profile
+    
+    @staticmethod
+    def record_save_event(user: User, sections: list[str]) -> ProfileSaveEvent:
+        """
+        Record a profile save event for dashboard history.
+        
+        Args:
+            user: The user who saved profile sections
+            sections: Top-level section keys included in the save
+        
+        Returns:
+            Created ProfileSaveEvent instance
+        """
+        if not sections:
+            return None
+        
+        return ProfileSaveEvent.objects.create(
+            user=user,
+            sections=sections,
+        )
+    
+    @staticmethod
+    def get_save_history(user: User, limit: int = 3) -> list[ProfileSaveEvent]:
+        """
+        Get recent profile save events for a user.
+        
+        Args:
+            user: The user whose history to retrieve
+            limit: Maximum number of events to return
+        
+        Returns:
+            List of ProfileSaveEvent instances, newest first
+        """
+        safe_limit = max(1, min(limit, 10))
+        return list(
+            ProfileSaveEvent.objects.filter(user=user).order_by('-saved_at')[:safe_limit]
+        )
     
     @staticmethod
     def delete_profile(user: User) -> bool:

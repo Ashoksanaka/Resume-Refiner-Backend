@@ -24,7 +24,11 @@ from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 from PIL import Image
 from io import BytesIO
-from app.profiles.serializers import ProfileSerializer, ProfileCreateUpdateSerializer
+from app.profiles.serializers import (
+    ProfileSerializer,
+    ProfileCreateUpdateSerializer,
+    ProfileSaveEventSerializer,
+)
 from app.profiles.services import ProfileService
 from app.authentication.services import AuthenticationService
 from app.common.exceptions import InvalidPayloadException, ResourceNotFoundException
@@ -107,6 +111,11 @@ class ProfileView(APIView):
             partial=False
         )
         
+        ProfileService.record_save_event(
+            user=request.user,
+            sections=list(serializer.validated_data.keys()),
+        )
+        
         serializer = ProfileSerializer(profile)
         data = serializer.data
         
@@ -140,19 +149,16 @@ class ProfileView(APIView):
                 details=serializer.errors
             )
         
-        # Check if profile exists
-        try:
-            ProfileService.get_profile(request.user)
-        except ResourceNotFoundException:
-            raise InvalidPayloadException(
-                message='Cannot patch a non-existent profile. Use PUT to create one first.',
-            )
-        
-        # Partially update the profile
+        # Partially update the profile (creates profile if missing)
         profile = ProfileService.create_or_update_profile(
             user=request.user,
             data=serializer.validated_data,
             partial=True
+        )
+        
+        ProfileService.record_save_event(
+            user=request.user,
+            sections=list(serializer.validated_data.keys()),
         )
         
         serializer = ProfileSerializer(profile)
@@ -163,6 +169,33 @@ class ProfileView(APIView):
             data['contact_info'] = None
         
         return Response(data, status=status.HTTP_200_OK)
+
+
+class ProfileHistoryView(APIView):
+    """
+    GET /profiles/me/history
+    
+    List recent profile save events for the current user.
+    """
+    
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """
+        GET /profiles/me/history?limit=3
+        
+        Response: 200 OK with array of save events
+        """
+        AuthenticationService.require_verified_email(request.user)
+        
+        try:
+            limit = int(request.query_params.get('limit', 3))
+        except (TypeError, ValueError):
+            limit = 3
+        
+        events = ProfileService.get_save_history(request.user, limit=limit)
+        serializer = ProfileSaveEventSerializer(events, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class ProfilePictureView(APIView):

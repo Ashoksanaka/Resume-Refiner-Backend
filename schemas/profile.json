@@ -6,7 +6,7 @@
   "properties": {
     "personalInfo": {
       "type": "object",
-      "required": ["full_name", "email"],
+      "required": ["full_name", "email", "phone_number", "location"],
       "properties": {
         "full_name": {
           "type": "string",
@@ -22,7 +22,8 @@
         },
         "phone_number": {
           "type": "string",
-          "description": "User's contact phone number.",
+          "description": "User's contact phone number in format +<countryCode>-<number> (e.g. +91-9876543210).",
+          "pattern": "^\\+\\d{1,4}-\\d{6,14}$",
           "maxLength": 50
         },
         "location": {
@@ -52,7 +53,7 @@
       "maxItems": 25,
       "items": {
         "type": "object",
-        "required": ["company", "title", "start_date"],
+        "required": ["company", "title", "start_date", "description"],
         "properties": {
           "company": {
             "type": "string",
@@ -74,6 +75,7 @@
           },
           "description": {
             "type": "string",
+            "minLength": 1,
             "maxLength": 5000
           }
         },
@@ -87,7 +89,16 @@
       "maxItems": 10,
       "items": {
         "type": "object",
-        "required": ["institution", "degree", "start_date"],
+        "required": [
+          "institution",
+          "degree_level",
+          "course",
+          "specialization",
+          "location",
+          "grade_type",
+          "grade_value",
+          "start_date"
+        ],
         "properties": {
           "institution": {
             "type": "string",
@@ -96,8 +107,64 @@
           },
           "degree": {
             "type": "string",
+            "maxLength": 255
+          },
+          "degree_level": {
+            "type": "string",
+            "enum": [
+              "Bachelor's",
+              "Master's",
+              "Doctorate",
+              "Diploma",
+              "Associate",
+              "High School",
+              "Other"
+            ]
+          },
+          "degree_level_other": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "course": {
+            "type": "string",
+            "enum": [
+              "BTech",
+              "BE",
+              "MTech",
+              "ME",
+              "BSc",
+              "MSc",
+              "MBA",
+              "BCA",
+              "MCA",
+              "BCom",
+              "MCom",
+              "BA",
+              "MA",
+              "PhD",
+              "Other"
+            ]
+          },
+          "course_other": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "specialization": {
+            "type": "string",
             "minLength": 1,
             "maxLength": 255
+          },
+          "location": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "grade_type": {
+            "type": "string",
+            "enum": ["percentage", "cgpa"]
+          },
+          "grade_value": {
+            "type": "number"
           },
           "start_date": {
             "type": "string",
@@ -160,7 +227,7 @@
       "maxItems": 50,
       "items": {
         "type": "object",
-        "required": ["id", "title", "role", "ongoing"],
+        "required": ["id", "title", "role", "ongoing", "description"],
         "properties": {
           "id": {
             "type": "string",
@@ -178,6 +245,7 @@
           },
           "description": {
             "type": "string",
+            "minLength": 1,
             "maxLength": 5000
           },
           "start_date": {
@@ -200,6 +268,15 @@
           },
           "link": {
             "type": ["string", "null"],
+            "format": "uri",
+            "description": "Legacy project URL; prefer github_url or deployment_url."
+          },
+          "github_url": {
+            "type": ["string", "null"],
+            "format": "uri"
+          },
+          "deployment_url": {
+            "type": ["string", "null"],
             "format": "uri"
           },
           "achievements": {
@@ -220,7 +297,7 @@
       "maxItems": 50,
       "items": {
         "type": "object",
-        "required": ["id", "title"],
+        "required": ["id", "title", "description"],
         "properties": {
           "id": {
             "type": "string",
@@ -233,11 +310,19 @@
           },
           "description": {
             "type": "string",
+            "minLength": 1,
             "maxLength": 2000
           },
           "issuer": {
             "type": "string",
             "maxLength": 255
+          },
+          "location": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "is_virtual": {
+            "type": "boolean"
           },
           "date": {
             "type": ["string", "null"],
@@ -378,7 +463,7 @@
       "maxItems": 50,
       "items": {
         "type": "object",
-        "required": ["id", "organization", "role"],
+        "required": ["id", "organization", "role", "description"],
         "properties": {
           "id": {
             "type": "string",
@@ -394,6 +479,10 @@
             "minLength": 1,
             "maxLength": 255
           },
+          "location": {
+            "type": "string",
+            "maxLength": 255
+          },
           "start_date": {
             "type": ["string", "null"],
             "format": "date"
@@ -404,6 +493,7 @@
           },
           "description": {
             "type": "string",
+            "minLength": 1,
             "maxLength": 5000
           }
         },
@@ -417,7 +507,7 @@
       "maxItems": 50,
       "items": {
         "type": "object",
-        "required": ["id", "title", "organization"],
+        "required": ["id", "title", "organization", "description"],
         "properties": {
           "id": {
             "type": "string",
@@ -433,6 +523,10 @@
             "minLength": 1,
             "maxLength": 255
           },
+          "location": {
+            "type": "string",
+            "maxLength": 255
+          },
           "start_date": {
             "type": "string",
             "format": "date"
@@ -443,6 +537,7 @@
           },
           "description": {
             "type": "string",
+            "minLength": 1,
             "maxLength": 5000
           }
         },
@@ -456,7 +551,7 @@
       "maxItems": 20,
       "items": {
         "type": "object",
-        "required": ["id", "start_date", "reason"],
+        "required": ["id", "start_date", "reason", "description"],
         "properties": {
           "id": {
             "type": "string",
@@ -476,6 +571,7 @@
           },
           "description": {
             "type": "string",
+            "minLength": 1,
             "maxLength": 2000
           }
         },
@@ -509,9 +605,18 @@
             "type": "string",
             "maxLength": 100
           },
-          "date": {
+          "awarded_date": {
             "type": ["string", "null"],
             "format": "date"
+          },
+          "expiration_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "date": {
+            "type": ["string", "null"],
+            "format": "date",
+            "description": "Legacy award date; prefer awarded_date."
           },
           "url": {
             "type": ["string", "null"],
@@ -528,7 +633,7 @@
       "maxItems": 50,
       "items": {
         "type": "object",
-        "required": ["id", "title", "provider"],
+        "required": ["id", "title", "provider", "description"],
         "properties": {
           "id": {
             "type": "string",
@@ -544,9 +649,25 @@
             "minLength": 1,
             "maxLength": 255
           },
-          "date": {
+          "start_date": {
             "type": ["string", "null"],
             "format": "date"
+          },
+          "end_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "venue": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "is_virtual": {
+            "type": "boolean"
+          },
+          "date": {
+            "type": ["string", "null"],
+            "format": "date",
+            "description": "Legacy completion date; prefer start_date/end_date."
           },
           "certificate_url": {
             "type": ["string", "null"],
@@ -554,6 +675,7 @@
           },
           "description": {
             "type": "string",
+            "minLength": 1,
             "maxLength": 2000
           }
         },
@@ -578,24 +700,202 @@
             "minLength": 1,
             "maxLength": 500
           },
+          "subtitle": {
+            "type": "string",
+            "maxLength": 500
+          },
           "authors": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["name"],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "affiliation": {
+                  "type": "string",
+                  "maxLength": 255
+                },
+                "order": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "is_corresponding": {
+                  "type": "boolean"
+                },
+                "orcid": {
+                  "type": "string",
+                  "maxLength": 50
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "doi": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "pmid": {
+            "type": "string",
+            "maxLength": 50
+          },
+          "pmcid": {
+            "type": "string",
+            "maxLength": 50
+          },
+          "isbn": {
+            "type": "string",
+            "maxLength": 50
+          },
+          "issn": {
+            "type": "string",
+            "maxLength": 50
+          },
+          "arxiv_id": {
+            "type": "string",
+            "maxLength": 50
+          },
+          "editor": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "venue": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "volume": {
+            "type": "string",
+            "maxLength": 50
+          },
+          "issue": {
+            "type": "string",
+            "maxLength": 50
+          },
+          "page_range": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "article_number": {
+            "type": "string",
+            "maxLength": 50
+          },
+          "date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "online_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "accepted_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "publication_year": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 9999
+          },
+          "publication_month": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 12
+          },
+          "keywords": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          "subject_categories": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          "url": {
+            "type": ["string", "null"],
+            "format": "uri"
+          },
+          "landing_page_url": {
+            "type": ["string", "null"],
+            "format": "uri"
+          },
+          "pdf_url": {
+            "type": ["string", "null"],
+            "format": "uri"
+          },
+          "repository_url": {
+            "type": ["string", "null"],
+            "format": "uri"
+          },
+          "version_label": {
+            "type": "string",
+            "maxLength": 50
+          },
+          "version_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "funding_sources": {
             "type": "array",
             "items": {
               "type": "string",
               "maxLength": 255
             }
           },
-          "venue": {
+          "grant_numbers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          "trial_registry": {
             "type": "string",
             "maxLength": 255
           },
-          "date": {
-            "type": ["string", "null"],
-            "format": "date"
+          "ethics_approvals": {
+            "type": "string",
+            "maxLength": 255
           },
-          "url": {
-            "type": ["string", "null"],
-            "format": "uri"
+          "copyright_holder": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "license": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "reuse_permissions": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "citation_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "altmetric_score": {
+            "type": "number",
+            "minimum": 0
+          },
+          "language": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "publication_type": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "document_type": {
+            "type": "string",
+            "maxLength": 100
           },
           "abstract": {
             "type": "string",
@@ -632,7 +932,55 @@
             "type": "string",
             "enum": ["filed", "granted", "pending"]
           },
+          "abstract": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "keywords": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          "application_number": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "publication_number": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "inventors": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 255
+            }
+          },
+          "applicants": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 255
+            }
+          },
+          "assignees": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 255
+            }
+          },
           "filing_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "priority_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "publication_date": {
             "type": ["string", "null"],
             "format": "date"
           },
@@ -640,9 +988,77 @@
             "type": ["string", "null"],
             "format": "date"
           },
+          "patent_office": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "family_id": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "ipc_codes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 50
+            }
+          },
+          "cpc_codes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 50
+            }
+          },
+          "us_classifications": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 50
+            }
+          },
+          "kind_code": {
+            "type": "string",
+            "maxLength": 20
+          },
+          "legal_status": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "pct_number": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "representative": {
+            "type": "string",
+            "maxLength": 255
+          },
           "url": {
             "type": ["string", "null"],
             "format": "uri"
+          },
+          "drawings_url": {
+            "type": ["string", "null"],
+            "format": "uri"
+          },
+          "pdf_url": {
+            "type": ["string", "null"],
+            "format": "uri"
+          },
+          "forward_citations": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "family_size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "publication_languages": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 100
+            }
           }
         },
         "additionalProperties": false
@@ -728,16 +1144,29 @@
       "maxItems": 50,
       "items": {
         "type": "object",
-        "required": ["language", "proficiency"],
+        "required": ["language", "read_proficiency", "write_proficiency", "speak_proficiency"],
         "properties": {
           "language": {
             "type": "string",
             "minLength": 1,
             "maxLength": 100
           },
+          "read_proficiency": {
+            "type": "string",
+            "enum": ["basic", "conversational", "professional", "native"]
+          },
+          "write_proficiency": {
+            "type": "string",
+            "enum": ["basic", "conversational", "professional", "native"]
+          },
+          "speak_proficiency": {
+            "type": "string",
+            "enum": ["basic", "conversational", "professional", "native"]
+          },
           "proficiency": {
             "type": "string",
-            "enum": ["native", "full_professional", "limited_professional", "conversational", "basic"]
+            "enum": ["native", "full_professional", "limited_professional", "conversational", "basic"],
+            "description": "Legacy single proficiency field; prefer read/write/speak proficiency."
           },
           "certification": {
             "type": "string",
@@ -754,7 +1183,7 @@
       "maxItems": 50,
       "items": {
         "type": "object",
-        "required": ["id", "name", "role"],
+        "required": ["id", "name", "role", "description"],
         "properties": {
           "id": {
             "type": "string",
@@ -770,6 +1199,10 @@
             "minLength": 1,
             "maxLength": 255
           },
+          "location": {
+            "type": "string",
+            "maxLength": 255
+          },
           "start_date": {
             "type": ["string", "null"],
             "format": "date"
@@ -780,6 +1213,7 @@
           },
           "description": {
             "type": "string",
+            "minLength": 1,
             "maxLength": 2000
           }
         },
@@ -815,7 +1249,7 @@
       "additionalProperties": false
     }
   },
-  "required": ["personalInfo"],
+  "required": ["personalInfo", "summary"],
   "additionalProperties": false,
   "examples": [
     {
@@ -837,7 +1271,7 @@
         "personalInfo": {
           "full_name": "Jane Smith",
           "email": "jane.smith@example.com",
-          "phone_number": "+1-555-123-4567",
+          "phone_number": "+1-5551234567",
           "location": "San Francisco, USA",
           "portfolio_url": "https://janesmith.dev"
         },
@@ -854,7 +1288,12 @@
         "education": [
           {
             "institution": "University of Technology",
-            "degree": "Bachelor of Science in Computer Science",
+            "degree_level": "Bachelor's",
+            "course": "BSc",
+            "specialization": "Computer Science",
+            "location": "California, United States",
+            "grade_type": "cgpa",
+            "grade_value": 8.5,
             "start_date": "2010-09-01",
             "end_date": "2014-05-30",
             "description": "Graduated magna cum laude."
@@ -879,6 +1318,8 @@
             "ongoing": false,
             "technologies": ["python", "django", "postgresql", "redis"],
             "link": "https://example.com/project",
+            "github_url": "https://github.com/janesmith/ecommerce-platform",
+            "deployment_url": "https://shop.example.com",
             "achievements": ["Reduced load time by 50%", "Achieved 99.9% uptime"]
           }
         ],
@@ -886,8 +1327,10 @@
           {
             "id": "660e8400-e29b-41d4-a716-446655440000",
             "title": "Employee of the Year",
-            "description": "Recognized for outstanding contributions",
+            "description": "Recognized for outstanding contributions to platform reliability.",
             "issuer": "Tech Corp",
+            "location": "San Francisco, USA",
+            "is_virtual": false,
             "date": "2023-12-01"
           }
         ],
@@ -927,6 +1370,7 @@
             "id": "770e8400-e29b-41d4-a716-446655440000",
             "organization": "Code for Good",
             "role": "Volunteer Developer",
+            "location": "San Francisco, USA",
             "start_date": "2020-01-01",
             "end_date": null,
             "description": "Developed open-source tools for non-profits."
@@ -937,6 +1381,7 @@
             "id": "880e8400-e29b-41d4-a716-446655440000",
             "title": "Board Member",
             "organization": "Tech Community Foundation",
+            "location": "San Francisco, USA",
             "start_date": "2022-01-01",
             "end_date": null,
             "description": "Served on the board of directors."
@@ -957,6 +1402,8 @@
             "name": "Professional Engineer",
             "issuer": "State Board of Engineering",
             "license_number": "PE-12345",
+            "awarded_date": "2015-05-01",
+            "expiration_date": "2025-05-01",
             "date": "2015-05-01",
             "url": "https://example.com/license"
           }
@@ -966,6 +1413,10 @@
             "id": "bb0e8400-e29b-41d4-a716-446655440000",
             "title": "Advanced Kubernetes",
             "provider": "CNCF",
+            "start_date": "2023-03-01",
+            "end_date": "2023-03-15",
+            "venue": "Online",
+            "is_virtual": true,
             "date": "2023-03-15",
             "certificate_url": "https://example.com/cert",
             "description": "Comprehensive Kubernetes administration course."
@@ -975,11 +1426,41 @@
           {
             "id": "cc0e8400-e29b-41d4-a716-446655440000",
             "title": "Scalable Microservices Architecture",
-            "authors": ["Jane Smith", "John Doe"],
+            "subtitle": "Design patterns for cloud-native systems",
+            "authors": [
+              {
+                "name": "Jane Smith",
+                "affiliation": "Tech Corp",
+                "order": 1,
+                "is_corresponding": true,
+                "orcid": "0000-0001-2345-6789"
+              },
+              {
+                "name": "John Doe",
+                "affiliation": "University of Technology",
+                "order": 2,
+                "is_corresponding": false
+              }
+            ],
+            "doi": "10.1109/MS.2023.1234567",
             "venue": "IEEE Software",
+            "volume": "40",
+            "issue": "5",
+            "page_range": "45-58",
             "date": "2023-09-01",
+            "publication_year": 2023,
+            "publication_month": 9,
+            "keywords": ["microservices", "cloud computing", "distributed systems"],
+            "subject_categories": ["Computer Science", "Software Engineering"],
             "url": "https://example.com/paper",
-            "abstract": "This paper presents a novel approach to microservices."
+            "landing_page_url": "https://example.com/paper",
+            "pdf_url": "https://example.com/paper.pdf",
+            "language": "English",
+            "publication_type": "journal article",
+            "document_type": "research article",
+            "abstract": "This paper presents a novel approach to microservices.",
+            "citation_count": 12,
+            "altmetric_score": 45.2
           }
         ],
         "patents": [
@@ -988,9 +1469,29 @@
             "title": "Distributed Cache System",
             "patent_number": "US12345678",
             "status": "granted",
+            "abstract": "A distributed caching system with automatic invalidation.",
+            "keywords": ["cache", "distributed systems"],
+            "application_number": "US16/123456",
+            "publication_number": "US2020123456A1",
+            "inventors": ["Jane Smith", "John Doe"],
+            "applicants": ["Tech Corp"],
+            "assignees": ["Tech Corp"],
             "filing_date": "2020-01-15",
+            "priority_date": "2019-06-01",
+            "publication_date": "2021-03-01",
             "grant_date": "2022-06-01",
-            "url": "https://patents.example.com/12345678"
+            "patent_office": "USPTO",
+            "family_id": "FAM-12345",
+            "ipc_codes": ["G06F12/08"],
+            "cpc_codes": ["G06F12/0864"],
+            "us_classifications": ["711/118"],
+            "kind_code": "B2",
+            "legal_status": "active",
+            "url": "https://patents.example.com/12345678",
+            "pdf_url": "https://patents.example.com/12345678.pdf",
+            "forward_citations": 5,
+            "family_size": 3,
+            "publication_languages": ["English"]
           }
         ],
         "honors_awards": [
@@ -1015,11 +1516,15 @@
         "languages": [
           {
             "language": "English",
-            "proficiency": "native"
+            "read_proficiency": "native",
+            "write_proficiency": "native",
+            "speak_proficiency": "native"
           },
           {
             "language": "Spanish",
-            "proficiency": "conversational",
+            "read_proficiency": "professional",
+            "write_proficiency": "conversational",
+            "speak_proficiency": "conversational",
             "certification": "DELE B2"
           }
         ],
@@ -1028,6 +1533,7 @@
             "id": "110e8400-e29b-41d4-a716-446655440000",
             "name": "IEEE Computer Society",
             "role": "Member",
+            "location": "Global",
             "start_date": "2015-01-01",
             "end_date": null,
             "description": "Active member since 2015."

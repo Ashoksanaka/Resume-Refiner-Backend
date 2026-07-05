@@ -18,6 +18,8 @@ jsonschema>=4.20,<5.0
 
 # Authentication
 PyJWT>=2.8,<3.0
+cryptography>=42.0,<44.0
+svix>=1.21,<2.0
 
 # HTTP client for AI agent and LaTeX service
 httpx>=0.26,<1.0

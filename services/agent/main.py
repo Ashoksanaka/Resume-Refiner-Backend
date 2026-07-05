@@ -1,10 +1,12 @@
 """AI Agent Microservice for Resume AI Platform.
 
-This service handles resume generation using Google's Gemini API.
-It takes a user profile and job description, then generates complete LaTeX documents from scratch.
+This service handles resume generation using NVIDIA NIM (OpenAI-compatible API).
+It customizes a fixed ATS LaTeX template using the candidate profile, job description,
+and an explicit list of selected profile sections.
 
 CRITICAL RULES:
-- The AI GENERATES complete LaTeX documents (no templates are used)
+- The AI CUSTOMIZES the provided LaTeX template (does not generate from scratch)
+- Only SELECTED_SECTIONS (+ personalInfo header) appear in the output
 - The AI CUSTOMIZES content, it does NOT invent
 - All company names, institutions, dates must come from the profile
 - The output must be valid LaTeX that compiles
@@ -19,26 +21,56 @@ import os
 import re
 import logging
 import json
+import asyncio
+import time
+from dataclasses import dataclass
 from typing import Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, field_validator
-import google.generativeai as genai
+from openai import OpenAI, APIStatusError, APITimeoutError, RateLimitError
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Resume AI Agent",
-    description="AI-powered resume customization service using Gemini",
+    description="AI-powered resume customization service using NVIDIA NIM",
     version="1.0.0"
 )
 
-# Configure Gemini
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+# Configure NVIDIA NIM (OpenAI-compatible cloud API)
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
+NVIDIA_API_BASE_URL = os.getenv("NVIDIA_API_BASE_URL", "https://integrate.api.nvidia.com/v1")
+NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-super-120b-a12b")
+NVIDIA_REQUEST_TIMEOUT = int(os.getenv("NVIDIA_REQUEST_TIMEOUT", "180"))
+
+nim_client: Optional[OpenAI] = None
+if NVIDIA_API_KEY:
+    nim_client = OpenAI(base_url=NVIDIA_API_BASE_URL, api_key=NVIDIA_API_KEY)
 else:
-    logger.warning("GEMINI_API_KEY not set. AI generation will fail.")
+    logger.warning("NVIDIA_API_KEY not set. AI generation will fail.")
+
+_SECTION_HEADING_RE = re.compile(r'\\(?:section\*?\{|resumeSectionTitle\{)')
+
+
+def _has_section_headings(text: str) -> bool:
+    return bool(_SECTION_HEADING_RE.search(text))
+
+
+def _has_section_body_content(text: str) -> bool:
+    """True when the document body has substantive section content."""
+    if re.search(
+        r'\\(?:item|resumeItem|resumeDetailLine|resumeSkillLine|resumeSummaryText|'
+        r'resumeEducationEntry|resumeProjectEntry|resumeExperienceHeading)\{',
+        text,
+    ):
+        return True
+    stripped = re.sub(r'\\resumeSectionTitle\{[^}]+\}', '', text)
+    stripped = re.sub(r'\\resumeHeader\{[^}]+\}', '', stripped)
+    stripped = re.sub(r'\\resumeContactLine\{[^}]+\}', '', stripped)
+    stripped = re.sub(r'\\begin\{document\}|\\end\{document\}', '', stripped)
+    stripped = re.sub(r'\s+', '', stripped)
+    return len(stripped) > 80
 
 
 # =============================================================================
@@ -135,18 +167,38 @@ def sanitize_profile_for_latex(profile: dict) -> dict:
         return profile
 
 
+ALLOWED_PROFILE_SECTIONS = frozenset({
+    'personalInfo',
+    'summary',
+    'experience',
+    'education',
+    'skills',
+    'certifications',
+    'projects',
+    'achievements',
+    'publications',
+    'patents',
+    'licenses',
+    'trainings',
+    'volunteering',
+    'organizations',
+    'positions',
+    'career_breaks',
+    'languages',
+    'test_scores',
+    'areas_of_interest',
+    'hobbies',
+})
+
+
 class GenerationRequest(BaseModel):
-    """Request model for resume generation.
-    
-    NOTE: The 'template' field is deprecated and no longer used.
-    The AI now generates complete LaTeX documents from scratch.
-    The field is kept for backward compatibility but is ignored.
-    """
+    """Request model for template-based resume generation."""
     profile: dict
     job_description: str
-    template: str  # Deprecated: no longer used, kept for backward compatibility
-    template_id: str  # Used for logging/identification only
-    
+    template: str
+    template_id: str
+    selected_sections: list[str]
+
     @field_validator('job_description')
     @classmethod
     def validate_job_description(cls, v: str) -> str:
@@ -156,7 +208,17 @@ class GenerationRequest(BaseModel):
         if len(v) > 20000:
             raise ValueError('Job description exceeds maximum length')
         return sanitize_for_prompt(v.strip())
-    
+
+    @field_validator('template')
+    @classmethod
+    def validate_template(cls, v: str) -> str:
+        """Require non-empty ATS reference template content."""
+        if not v or not v.strip():
+            raise ValueError('Template content cannot be empty')
+        if len(v) > 500000:
+            raise ValueError('Template content exceeds maximum length')
+        return v
+
     @field_validator('template_id')
     @classmethod
     def validate_template_id(cls, v: str) -> str:
@@ -164,6 +226,17 @@ class GenerationRequest(BaseModel):
         if not re.match(r'^[a-zA-Z0-9_-]+$', v):
             raise ValueError('Invalid template ID format')
         return v
+
+    @field_validator('selected_sections')
+    @classmethod
+    def validate_selected_sections(cls, v: list[str]) -> list[str]:
+        """Validate selected profile section keys."""
+        if not v:
+            raise ValueError('At least one section must be selected')
+        invalid = set(v) - ALLOWED_PROFILE_SECTIONS
+        if invalid:
+            raise ValueError(f'Invalid section keys: {sorted(invalid)}')
+        return list(dict.fromkeys(v))
 
 
 class GenerationResponse(BaseModel):
@@ -190,6 +263,165 @@ def load_system_prompt() -> str:
 
 
 SYSTEM_PROMPT = load_system_prompt()
+
+
+def build_user_prompt(
+    selected_sections: list[str],
+    job_description: str,
+    profile_json: str,
+    template_content: str,
+) -> str:
+    """Build structured user message with template, sections, JD, and profile."""
+    sections_json = json.dumps(selected_sections)
+    return f"""SELECTED_SECTIONS: {sections_json}
+
+=== BEGIN JOB DESCRIPTION ===
+{job_description}
+=== END JOB DESCRIPTION ===
+
+=== BEGIN CANDIDATE PROFILE (JSON) ===
+{profile_json}
+=== END CANDIDATE PROFILE ===
+
+=== BEGIN LATEX TEMPLATE ===
+{template_content}
+=== END LATEX TEMPLATE ===
+
+Customize the template per your instructions. Rewrite all narrative content (summary, bullets, skill groupings) for the target role — do not embed raw profile JSON text. Include ONLY sections in SELECTED_SECTIONS (plus personalInfo header). Output ONLY the complete LaTeX document — no markdown fences or commentary."""
+
+
+@dataclass
+class NimChatResult:
+    """Result from an NVIDIA NIM chat completion call."""
+    content: str
+    finish_reason: Optional[str] = None
+
+
+async def call_nim_chat(messages: list, max_tokens: int = 16384) -> NimChatResult:
+    """
+    Call NVIDIA NIM chat completions with retry logic.
+
+    Uses OpenAI-compatible API with thinking disabled for structured LaTeX output.
+    """
+    if not nim_client:
+        raise HTTPException(status_code=500, detail="NVIDIA_API_KEY is not configured")
+
+    max_retries = 2
+    last_error: Optional[Exception] = None
+
+    for attempt in range(max_retries + 1):
+        try:
+            logger.info(
+                "[AI Agent Service] Calling NVIDIA NIM API (model: %s, attempt %d/%d)",
+                NVIDIA_MODEL,
+                attempt + 1,
+                max_retries + 1,
+            )
+            response = nim_client.chat.completions.create(
+                model=NVIDIA_MODEL,
+                messages=messages,
+                temperature=0.7,
+                top_p=0.95,
+                max_tokens=max_tokens,
+                timeout=NVIDIA_REQUEST_TIMEOUT,
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            )
+            choice = response.choices[0]
+            content = (choice.message.content or "").strip()
+            finish_reason = choice.finish_reason
+            logger.info("[AI Agent Service] NIM response finish reason: %s", finish_reason)
+            return NimChatResult(content=content, finish_reason=finish_reason)
+        except RateLimitError as model_error:
+            logger.error("NVIDIA NIM API quota/rate limit exceeded: %s", model_error)
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "AI service quota exceeded. Please try again later.",
+                    "code": "AI_SERVICE_ERROR",
+                },
+            ) from model_error
+        except APIStatusError as model_error:
+            error_msg = str(model_error).lower()
+            last_error = model_error
+            if model_error.status_code == 404 or "not found" in error_msg:
+                logger.error("NVIDIA NIM model not found: %s, error: %s", NVIDIA_MODEL, model_error)
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": f"AI model '{NVIDIA_MODEL}' not available. Please check configuration.",
+                        "code": "AI_SERVICE_ERROR",
+                    },
+                ) from model_error
+            if attempt < max_retries:
+                logger.warning(
+                    "NVIDIA NIM API attempt %d failed, retrying: %s",
+                    attempt + 1,
+                    model_error,
+                )
+                await asyncio.sleep(2 ** attempt)
+                continue
+            logger.error("NVIDIA NIM API failed after %d attempts: %s", max_retries + 1, model_error)
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "AI service is temporarily unavailable. Please try again.",
+                    "code": "AI_SERVICE_ERROR",
+                },
+            ) from model_error
+        except APITimeoutError as model_error:
+            last_error = model_error
+            if attempt < max_retries:
+                logger.warning(
+                    "NVIDIA NIM API timeout on attempt %d, retrying: %s",
+                    attempt + 1,
+                    model_error,
+                )
+                await asyncio.sleep(2 ** attempt)
+                continue
+            logger.error("NVIDIA NIM API timed out after %d attempts", max_retries + 1)
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "AI service is temporarily unavailable. Please try again.",
+                    "code": "AI_SERVICE_ERROR",
+                },
+            ) from model_error
+        except Exception as model_error:
+            error_msg = str(model_error).lower()
+            last_error = model_error
+            if "quota" in error_msg or "rate limit" in error_msg:
+                logger.error("NVIDIA NIM API quota exceeded: %s", model_error)
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "AI service quota exceeded. Please try again later.",
+                        "code": "AI_SERVICE_ERROR",
+                    },
+                ) from model_error
+            if attempt < max_retries:
+                logger.warning(
+                    "NVIDIA NIM API attempt %d failed, retrying: %s",
+                    attempt + 1,
+                    model_error,
+                )
+                await asyncio.sleep(2 ** attempt)
+                continue
+            logger.error("NVIDIA NIM API failed after %d attempts: %s", max_retries + 1, model_error)
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "AI service is temporarily unavailable. Please try again.",
+                    "code": "AI_SERVICE_ERROR",
+                },
+            ) from model_error
+
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "error": "AI service is temporarily unavailable. Please try again.",
+            "code": "AI_SERVICE_ERROR",
+        },
+    ) from last_error
 
 
 def fix_mismatched_environments(source: str) -> str:
@@ -350,7 +582,7 @@ def fix_latex_issues(latex_source: str) -> str:
     """
     # Store original to check for content loss
     original_latex = latex_source
-    original_has_sections = bool(re.search(r'\\section\*?\{', original_latex))
+    original_has_sections = _has_section_headings(original_latex)
     
     # Remove titlesec package if present (causes \hrule issues)
     latex_source = re.sub(r'\\usepackage(\[.*?\])?\{titlesec\}', '', latex_source)
@@ -367,7 +599,7 @@ def fix_latex_issues(latex_source: str) -> str:
     
     # Verify sections are still present after environment fixes
     if original_has_sections:
-        after_fix_has_sections = bool(re.search(r'\\section\*?\{', latex_source))
+        after_fix_has_sections = _has_section_headings(latex_source)
         if not after_fix_has_sections:
             logger.error("[fix_latex_issues] CRITICAL: Sections were removed by fix_mismatched_environments! Restoring original.")
             latex_source = latex_source_before_env_fix
@@ -385,7 +617,7 @@ def fix_latex_issues(latex_source: str) -> str:
         # CRITICAL: Store original body to detect content loss
         original_body_for_fixes = body
         original_body_length_for_fixes = len(body)
-        original_body_has_sections = bool(re.search(r'\\section\*?\{', body))
+        original_body_has_sections = _has_section_headings(body)
         
         # Fix itemize/enumerate issues - "missing \item" errors
         # ONLY remove TRULY empty environments (no content at all, just whitespace)
@@ -470,7 +702,7 @@ def fix_latex_issues(latex_source: str) -> str:
         logger.debug("[fix_latex_issues] Body length after fixes: %d chars", len(body))
         
         # CRITICAL CHECK: Verify sections are still in body
-        body_has_sections = bool(re.search(r'\\section\*?\{', body))
+        body_has_sections = _has_section_headings(body)
         if original_has_sections and not body_has_sections:
             logger.error("[fix_latex_issues] CRITICAL: Sections were removed from body! Restoring original body.")
             # Restore original body
@@ -550,271 +782,75 @@ def fix_latex_issues(latex_source: str) -> str:
 @app.post("/generate", response_model=GenerationResponse)
 async def generate_resume(request: GenerationRequest):
     """
-    Generate a complete resume LaTeX document using Gemini.
-    
-    The AI generates the entire LaTeX document from scratch - no templates are used.
-    The output is a complete, compile-ready LaTeX document with ATS-friendly formatting.
-    
+    Customize the ATS LaTeX template for the candidate profile and job description.
+
+    The AI receives the full reference template, filtered profile JSON, job description,
+    and SELECTED_SECTIONS. It returns a complete compile-ready document containing only
+    the selected sections (+ personalInfo header).
+
     Security measures:
     - Job description is sanitized against prompt injection
     - Profile data has LaTeX special characters escaped
     - Strict output validation
-    
-    CRITICAL: This endpoint must NEVER return hallucinated content.
-    All validation failures result in HTTP 500 errors that the backend
-    should handle appropriately.
-    
-    NOTE: The 'template' field in the request is deprecated and ignored.
-    """
-    if not GEMINI_API_KEY:
-        raise HTTPException(status_code=500, detail="GEMINI_API_KEY is not configured")
 
-    logger.info("[AI Agent Service] Generating resume for template: %s", request.template_id)
-    logger.debug("[AI Agent Service] Request received - template_id: %s", request.template_id)
+    CRITICAL: This endpoint must NEVER return hallucinated content.
+    """
+    if not NVIDIA_API_KEY:
+        raise HTTPException(status_code=500, detail="NVIDIA_API_KEY is not configured")
+
+    logger.info(
+        "[AI Agent Service] Customizing template %s for sections: %s",
+        request.template_id,
+        request.selected_sections,
+    )
     
     try:
-        # Sanitize profile for LaTeX (escape special characters)
         logger.info("[AI Agent Service] Sanitizing user profile for LaTeX (escaping special characters)")
         safe_profile = sanitize_profile_for_latex(request.profile)
         profile_json = json.dumps(safe_profile, indent=2)
         logger.info("[AI Agent Service] Profile sanitized. Profile JSON length: %d chars", len(profile_json))
         
-        # Log profile structure
         profile_summary = {
-            'has_experience': bool(safe_profile.get('experience')),
-            'experience_count': len(safe_profile.get('experience', [])),
-            'has_education': bool(safe_profile.get('education')),
-            'education_count': len(safe_profile.get('education', [])),
-            'has_skills': bool(safe_profile.get('skills')),
-            'skills_count': len(safe_profile.get('skills', [])),
-            'has_projects': bool(safe_profile.get('projects')),
-            'projects_count': len(safe_profile.get('projects', [])),
+            'selected_sections': request.selected_sections,
+            'profile_keys': list(safe_profile.keys()),
         }
         logger.info("[AI Agent Service] Parsed user profile summary: %s", profile_summary)
         
-        # Job description is already sanitized by the validator
         safe_jd = request.job_description
         logger.info("[AI Agent Service] Job description length: %d chars", len(safe_jd))
+        logger.info("[AI Agent Service] Template content length: %d chars", len(request.template))
         
-        # Build the prompt with clear structure and strict instructions
-        # Use delimiters to separate user content from instructions
-        # NOTE: Templates are no longer used - AI generates complete LaTeX from scratch
-        logger.info("[AI Agent Service] Building prompt for Gemini API")
-        logger.debug("[AI Agent Service] System prompt length: %d chars", len(SYSTEM_PROMPT))
-        
-        prompt = f"""{SYSTEM_PROMPT}
-
-=== BEGIN JOB DESCRIPTION ===
-{safe_jd}
-=== END JOB DESCRIPTION ===
-
-=== BEGIN CANDIDATE PROFILE (JSON) ===
-{profile_json}
-=== END CANDIDATE PROFILE ===
-
-🚨🚨🚨 FINAL CRITICAL REMINDER BEFORE GENERATING 🚨🚨🚨
-
-YOU ARE ABOUT TO GENERATE THE RESUME. FOLLOW THESE STEPS EXACTLY:
-
-STEP 1: Generate the header (name and contact) ✓
-STEP 2: CHECK profile.experience - If it has entries, ADD \section*{{Experience}} with ALL entries ✓
-STEP 3: CHECK profile.education - If it has entries, ADD \section*{{Education}} with ALL entries ✓
-STEP 4: CHECK profile.skills - If it has entries, ADD \section*{{Skills}} with ALL skills ✓
-STEP 5: CHECK profile.projects - If it has entries, ADD \section*{{Projects}} with ALL projects ✓
-STEP 6: Add other sections as needed (Certifications, Awards, etc.) ✓
-STEP 7: Close with \end{{document}} ✓
-
-⚠️ DO NOT STOP AFTER STEP 1 ⚠️
-⚠️ DO NOT GENERATE ONLY THE HEADER ⚠️
-⚠️ DO NOT STOP AFTER \end{{center}} ⚠️
-⚠️ YOU MUST COMPLETE ALL STEPS ⚠️
-⚠️ CONTINUE GENERATING UNTIL YOU REACH \end{{document}} ⚠️
-
-A resume with only the header will be IMMEDIATELY REJECTED by the system.
-You MUST include Experience, Education, Skills sections if they exist in the profile.
-Your output MUST be at least 1000+ characters long to be considered complete.
-Keep generating LaTeX code until you have written \end{{document}}.
-
-⚠️ CRITICAL REMINDERS BEFORE GENERATING:
-
-1. VERIFY EVERY ENTITY:
-   - Every company name MUST exist in profile.experience[].company
-   - Every institution MUST exist in profile.education[].institution
-   - Every certification MUST exist in profile.certifications[]
-   - Every skill MUST exist in profile.skills[]
-   - Every date MUST come from profile.experience[] or profile.education[]
-
-2. DO NOT INVENT:
-   - DO NOT add company suffixes (Inc., LLC) unless in profile
-   - DO NOT use well-known companies/institutions unless in profile
-   - DO NOT add related skills or certifications
-   - DO NOT invent metrics, achievements, or statistics
-   - DO NOT modify job titles or add seniority levels
-
-3. LATEX COMMAND VALIDATION - CRITICAL:
-   ⚠️ The system validates ALL LaTeX commands. Undefined commands will cause REJECTION.
-   
-   ✅ USE ONLY STANDARD COMMANDS:
-   - Sections: \\section*{{...}}, \\subsection*{{...}} (WITH asterisk)
-   - Formatting: \\textbf{{...}}, \\textit{{...}}, \\emph{{...}}
-   - Lists: \\begin{{itemize}}, \\end{{itemize}}, \\item
-   - Spacing: \\vspace{{...}}, \\hspace{{...}}, \\newline
-   - Headers: \\textbf{{\\Large Name}} or \\textbf{{\\Huge Name}}
-   
-   ❌ DO NOT USE THESE (Will FAIL Validation):
-   - Section commands: \\sectiontitle, \\sectionTitle, \\resumesection, \\customsection
-   - Header commands: \\resumetitle, \\headertitle, \\nameformat, \\contactinfo
-   - List commands: \\resumelist, \\bulletlist, \\customitemize
-   - Item commands: \\experienceitem, \\educationitem, \\projectitem
-   - Formatting commands: \\boldtext, \\italictext, \\underlinetext
-   - Package commands: \\titleformat, \\titlespacing (titlesec forbidden)
-   - Package commands: \\faPhone, \\faEnvelope (fontawesome5 not loaded)
-   - Template commands: \\resumeItem, \\FullName (only in specific templates)
-   - Any invented command names → Use standard LaTeX commands only
-   
-   🔍 RED FLAGS - If command contains these, DON'T USE IT:
-   - "resume", "Resume", "custom", "Custom" at start
-   - "title", "Title", "heading", "Heading" at end
-   - "item", "Item", "list", "List" at end (except standard \\item)
-   - Mixed case like "SectionTitle", "ResumeItem" (LaTeX uses lowercase)
-   
-   💡 REMEMBER: If you're not sure a command exists, DON'T use it. Use standard commands instead.
-   💡 REMEMBER: Commands with "creative" names are ALWAYS wrong - use standard LaTeX.
-   💡 REMEMBER: Every undefined command will cause the entire generation to FAIL.
-   💡 REMEMBER: Math mode delimiters ($ and $$) MUST be balanced - every opening needs a closing.
-   💡 REMEMBER: Avoid math mode in resumes unless absolutely necessary - use text formatting instead.
-
-4. OUTPUT REQUIREMENTS:
-   - Output ONLY LaTeX code starting with \\documentclass
-   - Use \\textit{{}} for dates and locations (formatting, not entities)
-   - Use \\textbf{{}} for company/institution names (entities)
-   - Use \\section*{{...}} for section headings (NOT \\sectiontitle)
-   - CRITICAL: Include ALL sections that have data in the profile
-   - CRITICAL: The document must be COMPLETE - include Experience, Education, Skills sections
-   - CRITICAL: DO NOT generate only the header - include full resume content
-   - If a section has NO data, OMIT that section entirely
-   - If a section HAS data, you MUST include it with ALL entries
-   - Every \\begin{{itemize}} MUST have at least one \\item before \\end{{itemize}}
-
-5. VALIDATION:
-   The system will REJECT any output containing:
-   - Information not in the profile above
-   - Undefined LaTeX commands (like \\sectiontitle)
-   - Empty list environments
-   Double-check every company name, institution, certification, skill, AND LaTeX command before outputting.
-
-Generate the LaTeX resume now:"""
-        
-        # Log prompt summary for debugging
-        logger.info("[AI Agent Service] Prompt summary - System prompt: %d chars, JD: %d chars, Profile JSON: %d chars, Total: %d chars", 
-                   len(SYSTEM_PROMPT), len(safe_jd), len(profile_json), len(prompt))
-        logger.debug("[AI Agent Service] Profile JSON preview (first 500 chars): %s", profile_json[:500])
-        logger.debug("[AI Agent Service] Profile JSON preview (last 500 chars): %s", profile_json[-500:] if len(profile_json) > 500 else profile_json)
-        
-        # Verify profile data contains expected sections
-        if 'experience' in safe_profile and safe_profile['experience']:
-            logger.info("[AI Agent Service] Profile contains %d experience entries", len(safe_profile['experience']))
-            logger.debug("[AI Agent Service] First experience entry: %s", str(safe_profile['experience'][0])[:200])
-        if 'education' in safe_profile and safe_profile['education']:
-            logger.info("[AI Agent Service] Profile contains %d education entries", len(safe_profile['education']))
-        if 'skills' in safe_profile and safe_profile['skills']:
-            logger.info("[AI Agent Service] Profile contains %d skills", len(safe_profile['skills']))
-            logger.debug("[AI Agent Service] Skills list: %s", str(safe_profile['skills'])[:200])
-
-        # Use environment variable for model name, with fallback to stable model
-        # Available models: gemini-2.0-flash, gemini-2.5-flash, gemini-pro-latest, gemini-flash-latest
-        model_name = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
-        logger.info("Using Gemini model: %s", model_name)
-        
-        # Configure generation with timeout
-        # Increase max_output_tokens to ensure complete resumes are generated
-        generation_config = genai.types.GenerationConfig(
-            temperature=0.7,
-            max_output_tokens=16384,  # Increased from 8192 to allow longer resumes
-            top_p=0.95,
-            top_k=40,
+        user_prompt = build_user_prompt(
+            selected_sections=request.selected_sections,
+            job_description=safe_jd,
+            profile_json=profile_json,
+            template_content=request.template,
         )
         
-        model = genai.GenerativeModel(
-            model_name,
-            generation_config=generation_config,
+        logger.info(
+            "[AI Agent Service] Prompt summary - System: %d chars, User: %d chars",
+            len(SYSTEM_PROMPT),
+            len(user_prompt),
         )
+
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        logger.info("[AI Agent Service] Using NVIDIA NIM model: %s", NVIDIA_MODEL)
+
+        nim_result = await call_nim_chat(messages)
+        latex_source = nim_result.content
+
+        if nim_result.finish_reason == "length":
+            logger.warning("[AI Agent Service] Response was truncated due to token limit")
         
-        # Retry logic for transient failures
-        max_retries = 2
-        last_error = None
+        logger.info("[AI Agent Service] Received raw response from NVIDIA NIM (length: %d chars)", len(latex_source))
         
-        for attempt in range(max_retries + 1):
-            try:
-                logger.info("[AI Agent Service] Calling Gemini API (attempt %d/%d)", attempt + 1, max_retries + 1)
-                response = model.generate_content(
-                    prompt,
-                    request_options={"timeout": 150}  # Increased timeout to 150 seconds (allows for Gemini API latency + processing)
-                )
-                
-                # Check if response was cut off (incomplete)
-                if hasattr(response, 'candidates') and response.candidates:
-                    finish_reason = response.candidates[0].finish_reason if response.candidates else None
-                    if finish_reason == 'MAX_TOKENS':
-                        logger.warning("[AI Agent Service] Response was cut off due to token limit. Retrying with continuation...")
-                        # If cut off, try to continue
-                        if attempt < max_retries:
-                            continue
-                
-                break  # Success, exit retry loop
-            except Exception as model_error:
-                error_msg = str(model_error).lower()
-                last_error = model_error
-                
-                # If quota exhausted or model not found, don't retry
-                if "quota" in error_msg or "resource" in error_msg:
-                    logger.error("Gemini API quota exhausted: %s", model_error)
-                    raise HTTPException(
-                        status_code=503,
-                        detail={
-                            "error": "AI service quota exceeded. Please try again later.",
-                            "code": "AI_SERVICE_ERROR"
-                        }
-                    )
-                elif "not found" in error_msg:
-                    logger.error("Model not found: %s, error: %s", model_name, model_error)
-                    raise HTTPException(
-                        status_code=500,
-                        detail={
-                            "error": f"AI model '{model_name}' not available. Please check configuration.",
-                            "code": "AI_SERVICE_ERROR"
-                        }
-                    )
-                elif attempt < max_retries:
-                    # Retry for transient errors (timeout, network issues)
-                    logger.warning("Gemini API attempt %d failed, retrying: %s", attempt + 1, model_error)
-                    import asyncio
-                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
-                    continue
-                else:
-                    # Final attempt failed
-                    logger.error("Gemini API failed after %d attempts: %s", max_retries + 1, model_error)
-                    raise HTTPException(
-                        status_code=503,
-                        detail={
-                            "error": "AI service is temporarily unavailable. Please try again.",
-                            "code": "AI_SERVICE_ERROR"
-                        }
-                    )
-        
-        latex_source = response.text.strip()
-        logger.info("[AI Agent Service] Received raw response from Gemini (length: %d chars)", len(latex_source))
-        
-        # Log a sample of the raw response to see what Gemini actually generated
+        # Log a sample of the raw response
         logger.info("[AI Agent Service] Raw response preview (first 1000 chars): %s", latex_source[:1000])
         logger.info("[AI Agent Service] Raw response preview (last 500 chars): %s", latex_source[-500:] if len(latex_source) > 500 else latex_source)
-        
-        # Check if response was cut off or incomplete
-        if hasattr(response, 'candidates') and response.candidates:
-            finish_reason = response.candidates[0].finish_reason if response.candidates else None
-            logger.info("[AI Agent Service] Response finish reason: %s", finish_reason)
-            if finish_reason == 'MAX_TOKENS':
-                logger.warning("[AI Agent Service] Response was truncated due to token limit")
         
         # Check body content in RAW response BEFORE any cleanup
         raw_body_start = latex_source.find('\\begin{document}')
@@ -822,7 +858,7 @@ Generate the LaTeX resume now:"""
         if raw_body_start != -1 and raw_body_end != -1:
             raw_body = latex_source[raw_body_start:raw_body_end]
             raw_body_no_ws = re.sub(r'\s+', '', raw_body)
-            raw_has_sections = bool(re.search(r'\\section\*?\{', raw_body))
+            raw_has_sections = _has_section_headings(raw_body)
             logger.info("[AI Agent Service] RAW response body check - Length: %d chars, Has sections: %s", 
                        len(raw_body_no_ws), raw_has_sections)
             if raw_has_sections:
@@ -851,7 +887,7 @@ Generate the LaTeX resume now:"""
         if cleaned_body_start != -1 and cleaned_body_end != -1:
             cleaned_body = latex_source[cleaned_body_start:cleaned_body_end]
             cleaned_body_no_ws = re.sub(r'\s+', '', cleaned_body)
-            cleaned_has_sections = bool(re.search(r'\\section\*?\{', cleaned_body))
+            cleaned_has_sections = _has_section_headings(cleaned_body)
             logger.info("[AI Agent Service] AFTER markdown cleanup body check - Length: %d chars, Has sections: %s", 
                        len(cleaned_body_no_ws), cleaned_has_sections)
             if cleaned_has_sections:
@@ -919,7 +955,7 @@ Generate the LaTeX resume now:"""
                 if restored_body_start != -1 and restored_body_end != -1:
                     restored_body = latex_source[restored_body_start:restored_body_end]
                     restored_body_no_ws = re.sub(r'\s+', '', restored_body)
-                    restored_has_sections = bool(re.search(r'\\section\*?\{', restored_body))
+                    restored_has_sections = _has_section_headings(restored_body)
                     logger.info("[AI Agent Service] After restoration - Body length: %d chars, Has sections: %s", 
                                len(restored_body_no_ws), restored_has_sections)
                     if restored_has_sections:
@@ -932,7 +968,7 @@ Generate the LaTeX resume now:"""
         if body_start != -1 and body_end != -1:
             body_content = latex_source[body_start:body_end]
             body_no_ws = re.sub(r'\s+', '', body_content)
-            has_sections = bool(re.search(r'\\section\*?\{', body_content))
+            has_sections = _has_section_headings(body_content)
             
             logger.info("[AI Agent Service] Body content check AFTER fixes - Length: %d chars, Has sections: %s", 
                        len(body_no_ws), has_sections)
@@ -944,28 +980,27 @@ Generate the LaTeX resume now:"""
                 
                 # Try to continue generation by requesting the AI to complete the document
                 logger.info("[AI Agent Service] Attempting to request continuation from AI")
-                continuation_prompt = f"""The LaTeX document you generated is incomplete. It only contains the header (name and contact information).
+                continuation_prompt = f"""The LaTeX document you produced is incomplete.
 
-You MUST continue and add the following sections based on the profile data:
-- Experience section (if profile.experience exists)
-- Education section (if profile.education exists)  
-- Skills section (if profile.skills exists)
-- Projects section (if profile.projects exists)
+SELECTED_SECTIONS: {json.dumps(request.selected_sections)}
 
-Continue from where you left off. Add the missing sections and close with \\end{{document}}.
+Continue customizing the template. Include all selected sections that have profile data, preserve template macros and preamble, and close with \\end{{document}}.
 
-Current incomplete LaTeX:
-{latex_source[-500:]}
+Current incomplete LaTeX (tail):
+{latex_source[-800:]}
 
-Continue generating the complete LaTeX resume:"""
+Continue from where you left off. Output ONLY LaTeX — no markdown fences."""
                 
                 try:
-                    logger.info("[AI Agent Service] Requesting continuation from Gemini API")
-                    continuation_response = model.generate_content(
-                        continuation_prompt,
-                        request_options={"timeout": 150}  # Match main request timeout
-                    )
-                    continuation_text = continuation_response.text.strip()
+                    logger.info("[AI Agent Service] Requesting continuation from NVIDIA NIM API")
+                    continuation_messages = [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                        {"role": "assistant", "content": latex_source},
+                        {"role": "user", "content": continuation_prompt},
+                    ]
+                    continuation_result = await call_nim_chat(continuation_messages)
+                    continuation_text = continuation_result.content
                     logger.info("[AI Agent Service] Continuation response received (length: %d chars)", len(continuation_text))
                     
                     # Clean continuation response
@@ -1067,78 +1102,55 @@ Continue generating the complete LaTeX resume:"""
                 }
             )
         
-        # CRITICAL VALIDATION: Check if document has actual content sections
-        # The document should not be just header - it must have sections
+        # CRITICAL VALIDATION: document must include content for selected sections
         body_start = latex_source.find('\\begin{document}')
         body_end = latex_source.find('\\end{document}')
         if body_start != -1 and body_end != -1:
             body_content = latex_source[body_start:body_end]
-            # Check if body has section commands (Experience, Education, Skills, etc.)
-            # Use raw string and properly escape backslashes for regex
-            has_sections = bool(re.search(r'\\section\*?\{', body_content))
-            
-            # Also check for common section names in the content
-            # Sometimes sections might be formatted differently, so check for keywords
-            has_experience = bool(re.search(r'(?i)(experience|work\s+history|employment)', body_content))
-            has_education = bool(re.search(r'(?i)(education|academic)', body_content))
-            has_skills = bool(re.search(r'(?i)(skills?|technical\s+skills?)', body_content))
-            has_projects = bool(re.search(r'(?i)(projects?)', body_content))
-            has_any_content_section = has_experience or has_education or has_skills or has_projects
-            
-            # Count non-whitespace content
-            body_no_whitespace = re.sub(r'\s+', '', body_content)
-            
-            # Check if sections have actual content (not just empty headers)
-            # Look for \item commands or substantial text content after section headers
+            selected = set(request.selected_sections) | {'personalInfo'}
+            content_sections = selected - {'personalInfo'}
+            has_sections = _has_section_headings(body_content)
             has_list_items = bool(re.search(r'\\item', body_content))
-            # Count content after removing common header patterns
-            # Remove center environment content (name/contact) to check if there's more
-            content_after_header = re.sub(r'\\begin\{center\}.*?\\end\{center\}', '', body_content, flags=re.DOTALL)
-            content_after_header_no_ws = re.sub(r'\s+', '', content_after_header)
-            
-            # STRICT VALIDATION: Require sections to be present AND have content
-            # A complete resume must have at least one content section with actual data
-            if not has_sections and not has_any_content_section:
-                logger.error("AI output appears incomplete - missing content sections")
-                logger.error("Body length: %d, Has sections: %s, Has content keywords: %s", 
-                           len(body_no_whitespace), has_sections, has_any_content_section)
-                logger.error("Body preview (first 500 chars): %s", body_content[:500])
+            has_body_content = _has_section_body_content(body_content)
+            has_header = bool(re.search(r'\\resumeHeader\{', body_content))
+
+            if not has_header and 'personalInfo' in selected:
+                logger.error("AI output missing personalInfo header macros")
                 raise HTTPException(
                     status_code=500,
                     detail={
-                        "error": "AI generated incomplete LaTeX document - missing content sections. Document must include Experience, Education, Skills, or other sections with actual content.",
-                        "code": "MODEL_OUTPUT_INVALID"
-                    }
+                        "error": "AI generated incomplete LaTeX document - missing header",
+                        "code": "MODEL_OUTPUT_INVALID",
+                    },
                 )
-            
-            # Check if sections exist but are empty (no items, no substantial content)
-            if has_sections or has_any_content_section:
-                if not has_list_items and len(content_after_header_no_ws) < 150:
-                    logger.error("AI output has section headers but no content")
-                    logger.error("Has list items: %s, Content after header length: %d", has_list_items, len(content_after_header_no_ws))
-                    logger.error("Body preview (first 500 chars): %s", body_content[:500])
-                    raise HTTPException(
-                        status_code=500,
-                        detail={
-                            "error": "AI generated incomplete LaTeX document - sections exist but contain no content. Document must include Experience, Education, Skills sections with actual entries (items, text, etc.).",
-                            "code": "MODEL_OUTPUT_INVALID"
-                        }
-                    )
-            
-            # Also check if body is suspiciously short even with sections
-            # A complete resume should have substantial content
-            if len(body_no_whitespace) < 200:
-                logger.warning("Body content is very short (%d chars), but sections detected. Continuing...", len(body_no_whitespace))
 
-        # Record modifications made (these are generic - actual modifications
-        # depend on what the AI did, but we can't know exactly without analysis)
+            if content_sections and not has_sections:
+                logger.error("AI output missing section headings for selected sections")
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "AI generated incomplete LaTeX document - missing selected section content",
+                        "code": "MODEL_OUTPUT_INVALID",
+                    },
+                )
+
+            if content_sections and has_sections and not has_list_items and not has_body_content:
+                logger.error("AI output has section headers but no list content")
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "AI generated incomplete LaTeX document - sections contain no content",
+                        "code": "MODEL_OUTPUT_INVALID",
+                    },
+                )
+
         modifications = [
-            "Customized content based on job description keywords",
-            "Structured resume for ATS compatibility",
-            "Emphasized relevant experience and skills"
+            "Customized template content based on job description keywords",
+            f"Included sections: {', '.join(request.selected_sections)}",
+            "Preserved ATS-safe template structure",
         ]
         
-        logger.info("Resume generation successful for template: %s", request.template_id)
+        logger.info("Resume customization successful for template: %s", request.template_id)
         
         return GenerationResponse(
             latex_source=latex_source,

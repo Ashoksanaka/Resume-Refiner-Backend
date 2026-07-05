@@ -13,7 +13,7 @@ import logging
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from app.resumes.models import JobDescription, ResumeGenerationRequest
-from app.authentication.models import EmailVerificationToken, IdempotencyKey
+from app.authentication.models import IdempotencyKey
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,6 @@ class Command(BaseCommand):
         totals = {
             'job_descriptions': 0,
             'resume_requests': 0,
-            'verification_tokens': 0,
             'idempotency_keys': 0,
             'pdfs': 0,
         }
@@ -84,14 +83,7 @@ class Command(BaseCommand):
             
             resume_queryset.delete()
         
-        # 3. Clean up expired verification tokens
-        token_queryset = EmailVerificationToken.objects.filter(expires_at__lte=now)
-        totals['verification_tokens'] = token_queryset.count()
-        
-        if not dry_run and totals['verification_tokens'] > 0:
-            token_queryset.delete()
-        
-        # 4. Clean up expired idempotency keys
+        # 3. Clean up expired idempotency keys
         idem_queryset = IdempotencyKey.objects.filter(expires_at__lte=now)
         totals['idempotency_keys'] = idem_queryset.count()
         
@@ -104,7 +96,6 @@ class Command(BaseCommand):
         self.stdout.write(f"  Job Descriptions: {totals['job_descriptions']}")
         self.stdout.write(f"  Resume Requests:  {totals['resume_requests']}")
         self.stdout.write(f"  PDF Files:        {totals['pdfs']}")
-        self.stdout.write(f"  Verification Tokens: {totals['verification_tokens']}")
         self.stdout.write(f"  Idempotency Keys: {totals['idempotency_keys']}")
         
         total_deleted = sum(totals.values())

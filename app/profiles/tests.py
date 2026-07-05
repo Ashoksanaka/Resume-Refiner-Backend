@@ -11,7 +11,7 @@ import pytest
 from rest_framework import status
 from rest_framework.test import APIClient
 from app.authentication.models import User
-from app.profiles.models import Profile
+from app.profiles.models import Profile, ProfileSaveEvent
 
 
 @pytest.fixture
@@ -46,9 +46,9 @@ def valid_profile_data():
     return {
         'personalInfo': {
             'full_name': 'Jane Doe',
-            'email': 'jane.doe@example.com',
-            'phone_number': '+1-555-123-4567',
-            'location': 'New York, USA',
+            'email': 'test@example.com',
+            'phone_number': '+1-5551234567',
+            'location': 'New York, New York, United States',
             'portfolio_url': 'https://jane-doe.dev'
         },
         'summary': 'Innovative software engineer with 5+ years of experience in building scalable applications.',
@@ -64,9 +64,14 @@ def valid_profile_data():
         'education': [
             {
                 'institution': 'State University',
-                'degree': 'B.S. in Computer Science',
+                'degree_level': "Bachelor's",
+                'course': 'BSc',
+                'specialization': 'Computer Science',
+                'location': 'California, United States',
+                'grade_type': 'cgpa',
+                'grade_value': 8.5,
                 'start_date': '2012-08-01',
-                'end_date': '2016-05-20'
+                'end_date': '2016-05-20',
             }
         ],
         'skills': ['Python', 'Django', 'TypeScript', 'React', 'AWS'],
@@ -185,9 +190,9 @@ class TestProfilePut:
         incomplete_data = {
             'personalInfo': {
                 'full_name': 'John Doe',
-                'email': 'john@example.com'
+                'email': 'test@example.com',
             },
-            # Missing summary, experience, education, skills
+            # Missing phone_number and location
         }
         
         response = api_client.put(
@@ -197,6 +202,71 @@ class TestProfilePut:
         )
         
         assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+class TestPersonalInfoValidation:
+    """Tests for personalInfo field validation."""
+
+    def test_create_profile_invalid_phone(self, api_client, verified_user, valid_profile_data):
+        api_client.force_authenticate(user=verified_user)
+        invalid_data = valid_profile_data.copy()
+        invalid_data['personalInfo'] = {
+            **valid_profile_data['personalInfo'],
+            'phone_number': '+1-555-123-4567',
+        }
+
+        response = api_client.put('/api/v1/profiles/me', invalid_data, format='json')
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data['error_code'] == 'INVALID_PAYLOAD'
+
+    def test_create_profile_email_mismatch(self, api_client, verified_user, valid_profile_data):
+        api_client.force_authenticate(user=verified_user)
+        invalid_data = valid_profile_data.copy()
+        invalid_data['personalInfo'] = {
+            **valid_profile_data['personalInfo'],
+            'email': 'other@example.com',
+        }
+
+        response = api_client.put('/api/v1/profiles/me', invalid_data, format='json')
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data['error_code'] == 'INVALID_PAYLOAD'
+
+    def test_create_profile_missing_location(self, api_client, verified_user, valid_profile_data):
+        api_client.force_authenticate(user=verified_user)
+        invalid_data = valid_profile_data.copy()
+        invalid_data['personalInfo'] = {
+            'full_name': 'Jane Doe',
+            'email': 'test@example.com',
+            'phone_number': '+1-5551234567',
+        }
+
+        response = api_client.put('/api/v1/profiles/me', invalid_data, format='json')
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data['error_code'] == 'INVALID_PAYLOAD'
+
+    def test_create_profile_missing_summary(self, api_client, verified_user, valid_profile_data):
+        api_client.force_authenticate(user=verified_user)
+        invalid_data = valid_profile_data.copy()
+        del invalid_data['summary']
+
+        response = api_client.put('/api/v1/profiles/me', invalid_data, format='json')
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data['error_code'] == 'INVALID_PAYLOAD'
+
+    def test_create_profile_summary_too_short(self, api_client, verified_user, valid_profile_data):
+        api_client.force_authenticate(user=verified_user)
+        invalid_data = valid_profile_data.copy()
+        invalid_data['summary'] = 'Too short'
+
+        response = api_client.put('/api/v1/profiles/me', invalid_data, format='json')
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data['error_code'] == 'INVALID_PAYLOAD'
 
 
 @pytest.mark.django_db
@@ -219,14 +289,56 @@ class TestProfilePatch:
         # Other fields should remain unchanged
         assert response.data['personalInfo']['full_name'] == 'Jane Doe'
     
-    def test_patch_nonexistent_profile(self, api_client, verified_user):
-        """Test patching non-existent profile fails."""
+    def test_patch_nonexistent_profile(self, api_client, verified_user, valid_profile_data):
+        """Test patching non-existent profile creates it."""
         api_client.force_authenticate(user=verified_user)
         
         response = api_client.patch(
             '/api/v1/profiles/me',
-            {'summary': 'New summary'},
+            {
+                'personalInfo': valid_profile_data['personalInfo'],
+            },
             format='json'
         )
         
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.status_code == status.HTTP_200_OK
+        assert Profile.objects.filter(user=verified_user).exists()
+        assert response.data['personalInfo']['full_name'] == 'Jane Doe'
+    
+    def test_patch_creates_save_event(self, api_client, verified_user, valid_profile_data):
+        """Test patch records a profile save event."""
+        Profile.objects.create(user=verified_user, data=valid_profile_data)
+        
+        api_client.force_authenticate(user=verified_user)
+        response = api_client.patch(
+            '/api/v1/profiles/me',
+            {'summary': 'Updated summary for history tracking.'},
+            format='json'
+        )
+        
+        assert response.status_code == status.HTTP_200_OK
+        event = ProfileSaveEvent.objects.get(user=verified_user)
+        assert event.sections == ['summary']
+
+
+@pytest.mark.django_db
+class TestProfileHistory:
+    """Tests for GET /profiles/me/history"""
+
+    def test_get_history_returns_latest_three(self, api_client, verified_user, valid_profile_data):
+        Profile.objects.create(user=verified_user, data=valid_profile_data)
+        api_client.force_authenticate(user=verified_user)
+
+        for index in range(4):
+            api_client.patch(
+                '/api/v1/profiles/me',
+                {'summary': f'Summary version {index} with enough characters.'},
+                format='json'
+            )
+
+        response = api_client.get('/api/v1/profiles/me/history?limit=3')
+
+        assert response.status_code == status.HTTP_200_OK
+        assert len(response.data) == 3
+        assert response.data[0]['sections'] == ['summary']
+        assert 'Updated Summary' in response.data[0]['label']

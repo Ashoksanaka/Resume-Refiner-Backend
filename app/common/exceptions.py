@@ -123,6 +123,13 @@ class ResourceNotFoundException(BaseAPIException):
     default_status = status.HTTP_404_NOT_FOUND
 
 
+class ConflictException(BaseAPIException):
+    """Raised when an operation conflicts with the current resource state."""
+    error_code = ErrorCode.INVALID_PAYLOAD
+    default_message = 'Operation not allowed in the current state.'
+    default_status = status.HTTP_409_CONFLICT
+
+
 class ModelOutputInvalidException(BaseAPIException):
     """Raised when AI model produces invalid/hallucinated output."""
     error_code = ErrorCode.MODEL_OUTPUT_INVALID

@@ -80,6 +80,14 @@ class User(AbstractUser):
         default=False,
         help_text='Designates whether this user has verified their email address.'
     )
+    clerk_id = models.CharField(
+        max_length=255,
+        unique=True,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text='Clerk user ID (sub claim from session JWT).'
+    )
     
     # Override default fields
     first_name = None  # We don't use these; full_name is in Profile
@@ -95,6 +103,7 @@ class User(AbstractUser):
         indexes = [
             models.Index(fields=['email']),
             models.Index(fields=['is_verified']),
+            models.Index(fields=['clerk_id']),
         ]
     
     def __str__(self):
@@ -107,110 +116,6 @@ class User(AbstractUser):
         if not self.username:
             self.username = self.email.split('@')[0][:150]
         super().save(*args, **kwargs)
-
-
-class EmailVerificationToken(models.Model):
-    """
-    Token for email verification during signup.
-    
-    Tokens expire after EMAIL_VERIFICATION_TOKEN_EXPIRY_HOURS (default: 24h).
-    """
-    
-    id = models.UUIDField(
-        primary_key=True,
-        default=uuid.uuid4,
-        editable=False
-    )
-    user = models.ForeignKey(
-        User,
-        on_delete=models.CASCADE,
-        related_name='verification_tokens'
-    )
-    token = models.CharField(
-        max_length=64,
-        unique=True,
-        db_index=True
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-    expires_at = models.DateTimeField()
-    used_at = models.DateTimeField(null=True, blank=True)
-    
-    class Meta:
-        db_table = 'email_verification_tokens'
-        indexes = [
-            models.Index(fields=['token']),
-            models.Index(fields=['expires_at']),
-        ]
-    
-    def __str__(self):
-        return f"Verification token for {self.user.email}"
-    
-    @property
-    def is_valid(self):
-        """
-        Check if the token is still valid (not expired and not used).
-        """
-        return (
-            self.used_at is None and
-            self.expires_at > timezone.now()
-        )
-    
-    def mark_used(self):
-        """
-        Mark the token as used.
-        """
-        self.used_at = timezone.now()
-        self.save(update_fields=['used_at'])
-
-
-class PasswordResetToken(models.Model):
-    """
-    Token for password reset functionality.
-    
-    Tokens expire after 1 hour for security.
-    """
-    
-    id = models.UUIDField(
-        primary_key=True,
-        default=uuid.uuid4,
-        editable=False
-    )
-    user = models.ForeignKey(
-        User,
-        on_delete=models.CASCADE,
-        related_name='password_reset_tokens'
-    )
-    token = models.CharField(
-        max_length=64,
-        unique=True,
-        db_index=True
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-    expires_at = models.DateTimeField()
-    used_at = models.DateTimeField(null=True, blank=True)
-    
-    class Meta:
-        db_table = 'password_reset_tokens'
-        indexes = [
-            models.Index(fields=['token']),
-            models.Index(fields=['expires_at']),
-        ]
-    
-    def __str__(self):
-        return f"Password reset token for {self.user.email}"
-    
-    @property
-    def is_valid(self):
-        """Check if the token is still valid (not expired and not used)."""
-        return (
-            self.used_at is None and
-            self.expires_at > timezone.now()
-        )
-    
-    def mark_used(self):
-        """Mark the token as used."""
-        self.used_at = timezone.now()
-        self.save(update_fields=['used_at'])
 
 
 class IdempotencyKey(models.Model):

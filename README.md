@@ -8,7 +8,7 @@ Django REST API backend for the Resume Refiner platform. Provides authentication
 - **Database**: PostgreSQL 15+
 - **Task Queue**: Celery with Redis broker
 - **API**: RESTful API with OpenAPI/Swagger documentation
-- **Authentication**: Session-based authentication with email verification
+- **Authentication**: Clerk JWT verification with local user sync via webhooks
 - **Microservices**: AI Agent and LaTeX services for resume generation
 
 ## Prerequisites
@@ -100,7 +100,14 @@ REDIS_URL=redis://localhost:6379/0
 ### Optional
 
 ```bash
-# Email (SendGrid)
+# Clerk (required for API auth)
+CLERK_SECRET_KEY=sk_test_...
+CLERK_JWT_ISSUER=https://your-app.clerk.accounts.dev
+CLERK_WEBHOOK_SECRET=whsec_...
+CLERK_AUDIENCE=
+CLERK_JWKS_CACHE_TTL=3600
+
+# Email (optional — auth emails handled by Clerk)
 SENDGRID_API_KEY=your-sendgrid-api-key
 DEFAULT_FROM_EMAIL=noreply@yourdomain.com
 EMAIL_FROM_NAME=Resume Refiner
@@ -108,11 +115,22 @@ FRONTEND_URL=http://localhost:3000
 
 # Microservices
 AI_AGENT_URL=http://localhost:8001
+AI_AGENT_TIMEOUT=180
 LATEX_SERVICE_URL=http://localhost:8002
-GEMINI_API_KEY=your-gemini-api-key
+NVIDIA_API_KEY=your-nvidia-nim-api-key
+NVIDIA_MODEL=nvidia/nemotron-3-super-120b-a12b
+NVIDIA_API_BASE_URL=https://integrate.api.nvidia.com/v1
+NVIDIA_REQUEST_TIMEOUT=180
 
-# Authentication
-AUTH_DETAILED_ERRORS=False  # Set to True for development only
+# FormaTeX cloud PDF compilation (optional)
+# When FORMATEX_API_KEY is set, resume PDFs compile via FormaTeX instead of the local LaTeX service.
+# The LaTeX microservice is still used for template fetching. Unset the key to use local pdflatex.
+# Free plan: ~15 compilations/month — rotate keys if exposed; use Pro+ for production.
+FORMATEX_API_KEY=
+FORMATEX_API_BASE_URL=https://api.formatex.io/api/v1
+FORMATEX_ENGINE=auto
+FORMATEX_TIMEOUT=120
+FORMATEX_USE_SMART_COMPILE=True
 ```
 
 ## Project Structure
@@ -186,20 +204,16 @@ python manage.py showmigrations
 
 ## Security Features
 
-- Password validation (min 10 chars, uppercase, number, symbol)
-- Session cookie security (HttpOnly, Secure, SameSite)
+- Clerk JWT verification (RS256 via JWKS)
+- Session cookie security for Django admin (HttpOnly, Secure, SameSite)
 - PII filtering in logs
-- Email verification required for account activation
 - CORS protection
 - CSRF protection
 
 ## Management Commands
 
 ```bash
-# Verify user email
-python manage.py verify_user <email>
-
-# Cleanup expired tokens
+# Cleanup expired resources
 python manage.py cleanup_expired
 
 # Sync resume templates

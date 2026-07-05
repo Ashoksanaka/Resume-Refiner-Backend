@@ -2,9 +2,9 @@
 Serializers for resume-related endpoints.
 
 As per API contract:
-- POST /jds: {text} -> JobDescription
+- POST /jds: {role_name, text} -> JobDescription
 - GET /jds/{id}: JobDescription
-- POST /resumes: {job_description_id, template_id?} -> ResumeGenerationRequest
+- POST /resumes: {job_description_id, template_id?, sections} -> ResumeGenerationRequest
 - GET /resumes: [ResumeGenerationRequest]
 - GET /resumes/{id}/status: ResumeGenerationRequest
 - GET /resumes/{id}/source: {latex_source, modifications}
@@ -12,6 +12,7 @@ As per API contract:
 
 from rest_framework import serializers
 from app.resumes.models import JobDescription, ResumeGenerationRequest
+from app.resumes.services import ALLOWED_PROFILE_SECTIONS
 from app.common.models import Template
 
 
@@ -22,6 +23,7 @@ class JobDescriptionSerializer(serializers.ModelSerializer):
     Response schema:
     {
         "id": "<uuid>",
+        "role_name": "<role_title>",
         "text": "<job_description_text>",
         "created_at": "<iso_datetime>",
         "expires_at": "<iso_datetime>"
@@ -30,7 +32,7 @@ class JobDescriptionSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = JobDescription
-        fields = ['id', 'text', 'created_at', 'expires_at']
+        fields = ['id', 'role_name', 'text', 'created_at', 'expires_at']
         read_only_fields = ['id', 'created_at', 'expires_at']
 
 
@@ -40,14 +42,22 @@ class JobDescriptionCreateSerializer(serializers.Serializer):
     
     Request:
     {
+        "role_name": "<target_role_title>",
         "text": "<job_description_text>" (min 50, max 20000 chars)
     }
     
     SECURITY: Validates minimum length to ensure meaningful JD content.
     """
     
+    role_name = serializers.CharField(min_length=2, max_length=200)
     text = serializers.CharField(min_length=50, max_length=20000)
     
+    def validate_role_name(self, value):
+        role_name = value.strip()
+        if len(role_name) < 2:
+            raise serializers.ValidationError('Role name must be at least 2 characters.')
+        return role_name
+
     def validate_text(self, value):
         """Validate that text is meaningful after stripping."""
         text = value.strip()
@@ -67,13 +77,15 @@ class ResumeGenerationRequestSerializer(serializers.ModelSerializer):
     Response schema:
     {
         "id": "<uuid>",
-        "status": "pending|processing|success|failed",
+        "status": "pending|processing|success|failed|cancelled",
         "failure_reason": "<string>|null",
         "created_at": "<iso_datetime>",
         "expires_at": "<iso_datetime>"
     }
     """
     
+    failure_reason = serializers.CharField(read_only=True)
+
     class Meta:
         model = ResumeGenerationRequest
         fields = ['id', 'status', 'failure_reason', 'created_at', 'expires_at']
@@ -87,12 +99,17 @@ class ResumeGenerationCreateSerializer(serializers.Serializer):
     Request:
     {
         "job_description_id": "<uuid>",
-        "template_id": "<string>" (optional, defaults to 'tccv')
+        "template_id": "<string>" (optional, defaults to 'tccv'),
+        "sections": ["experience", "education", ...]
     }
     """
     
     job_description_id = serializers.UUIDField()
     template_id = serializers.CharField(max_length=100, required=False, default='tccv', write_only=True)
+    sections = serializers.ListField(
+        child=serializers.CharField(max_length=50),
+        min_length=1,
+    )
     
     def validate_job_description_id(self, value):
         """Validate that the job description exists and belongs to the user."""
@@ -115,6 +132,14 @@ class ResumeGenerationCreateSerializer(serializers.Serializer):
         if not Template.objects.filter(id=value, is_active=True).exists():
             raise serializers.ValidationError('Template not found or not available.')
         return value
+
+    def validate_sections(self, value):
+        invalid = [key for key in value if key not in ALLOWED_PROFILE_SECTIONS]
+        if invalid:
+            raise serializers.ValidationError(
+                f'Invalid profile section keys: {", ".join(sorted(set(invalid)))}'
+            )
+        return list(dict.fromkeys(value))
 
 
 class ResumeSourceSerializer(serializers.Serializer):

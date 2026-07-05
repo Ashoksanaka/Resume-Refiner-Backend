@@ -1,0 +1,42 @@
+% ATS resume layout + macros — single source of truth for spacing and formatting.
+% Section structure mirrors example_Template.tex (titlesec + \section*).
+
+\pagestyle{empty}
+\usepackage{titlesec}
+\titleformat{\section}{\large\bfseries}{}{0pt}{}[\titlerule]
+\titlespacing{\section}{0pt}{8pt}{4pt}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0pt}
+\setlist[itemize]{left=0pt, itemsep=2pt, topsep=2pt}
+\urlstyle{same}
+
+\newcommand{\resumeHeader}[1]{%
+  \begin{center}{\LARGE \textbf{#1}}\\[4pt]\end{center}%
+}
+\newcommand{\resumeContactLine}[1]{%
+  \begin{center}\small #1\end{center}%
+  \vspace{-8pt}%
+}
+\newcommand{\resumeSectionTitle}[1]{\section*{#1}}
+\newcommand{\resumeSummaryText}[1]{#1\par}
+\newcommand{\resumeExperienceHeading}[4]{%
+  \noindent\textbf{#1} \hfill \textbf{#2}\\%
+  \textit{#3}\ifx&#4&\else \hfill #4\fi\\[1pt]%
+}
+\newcommand{\resumeEducationEntry}[4]{%
+  \textbf{#1} \hfill #2\\%
+  #3\\%
+  #4%
+  \vspace{2pt}%
+}
+\newcommand{\resumeProjectEntry}[3]{%
+  \textbf{#1} \hfill \textbf{#2}\\%
+  \textit{#3}%
+  \vspace{2pt}%
+}
+\newcommand{\resumeSkillLine}[2]{\textbf{#1:} #2\par}
+\newcommand{\resumeItem}[1]{\item #1}
+\newcommand{\resumeDetailLine}[1]{#1\par}
+\newcommand{\resumeEntryHeading}[4]{\resumeExperienceHeading{#1}{#2}{#3}{#4}}
+\newcommand{\resumeTagList}[1]{\resumeDetailLine{#1}}

@@ -24,6 +24,11 @@ class JobDescription(TemporaryResource):
     Only log the JD id for debugging.
     """
     
+    role_name = models.CharField(
+        max_length=200,
+        help_text='Target role title for this job description'
+    )
+
     text = models.TextField(
         max_length=20000,
         help_text='Raw text of the job description'
@@ -69,12 +74,14 @@ class ResumeGenerationRequest(TemporaryResource):
     STATUS_PROCESSING = 'processing'
     STATUS_SUCCESS = 'success'
     STATUS_FAILED = 'failed'
+    STATUS_CANCELLED = 'cancelled'
     
     STATUS_CHOICES = [
         (STATUS_PENDING, 'Pending'),
         (STATUS_PROCESSING, 'Processing'),
         (STATUS_SUCCESS, 'Success'),
         (STATUS_FAILED, 'Failed'),
+        (STATUS_CANCELLED, 'Cancelled'),
     ]
     
     # Foreign keys
@@ -119,6 +126,17 @@ class ResumeGenerationRequest(TemporaryResource):
         default=dict,
         blank=True,
         help_text='Copy of profile data used for generation'
+    )
+    selected_sections = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Profile section keys included in this generation'
+    )
+    celery_task_id = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text='Celery task ID for cancellation'
     )
     
     # Error tracking
@@ -171,8 +189,12 @@ class ResumeGenerationRequest(TemporaryResource):
     
     @property
     def is_complete(self):
-        """Check if the generation has completed (success or failure)."""
-        return self.status in (self.STATUS_SUCCESS, self.STATUS_FAILED)
+        """Check if the generation has completed (success, failure, or cancelled)."""
+        return self.status in (
+            self.STATUS_SUCCESS,
+            self.STATUS_FAILED,
+            self.STATUS_CANCELLED,
+        )
     
     @property
     def failure_reason(self):
@@ -209,6 +231,18 @@ class ResumeGenerationRequest(TemporaryResource):
         from django.utils import timezone
         self.status = self.STATUS_FAILED
         self.failure_reason_code = error_code
+        self.failure_details = error_details
+        self.completed_at = timezone.now()
+        self.save(update_fields=[
+            'status', 'failure_reason_code', 'failure_details',
+            'completed_at', 'updated_at'
+        ])
+
+    def mark_cancelled(self, error_details: str = 'Generation cancelled.'):
+        """Mark the request as cancelled by the user."""
+        from django.utils import timezone
+        self.status = self.STATUS_CANCELLED
+        self.failure_reason_code = 'CANCELLED_BY_USER'
         self.failure_details = error_details
         self.completed_at = timezone.now()
         self.save(update_fields=[

@@ -11,14 +11,63 @@ Profile data is validated against /backend/schemas/profile.json
 
 import json
 import logging
+import re
 import uuid
 from pathlib import Path
 from rest_framework import serializers
 from jsonschema import validate, ValidationError as JSONSchemaValidationError
 from django.conf import settings
-from app.profiles.models import Profile
+from app.profiles.models import Profile, ProfileSaveEvent
 
 logger = logging.getLogger(__name__)
+
+PHONE_NUMBER_PATTERN = re.compile(r'^\+\d{1,4}-\d{6,14}$')
+LANGUAGE_PROFICIENCY_CHOICES = ('basic', 'conversational', 'professional', 'native')
+LEGACY_LANGUAGE_PROFICIENCY_CHOICES = (
+    'native', 'full_professional', 'limited_professional', 'conversational', 'basic'
+)
+
+
+def validate_date_range(attrs, start_key='start_date', end_key='end_date', *, skip_future_end=False):
+    """Validate start/end dates: not in future; end after start when end is not null."""
+    from datetime import date
+    today = date.today()
+
+    start_date = attrs.get(start_key)
+    end_date = attrs.get(end_key)
+
+    if start_date and start_date > today:
+        raise serializers.ValidationError({
+            start_key: 'Start date cannot be in the future.'
+        })
+
+    if end_date is not None:
+        if not skip_future_end and end_date > today:
+            raise serializers.ValidationError({
+                end_key: 'End date cannot be in the future.'
+            })
+
+        if start_date and end_date < start_date:
+            raise serializers.ValidationError({
+                end_key: 'End date must be after start date.'
+            })
+
+    return attrs
+
+
+def validate_not_future_date(attrs, date_key, label=None):
+    """Validate a single date field is not in the future."""
+    from datetime import date
+    today = date.today()
+
+    value = attrs.get(date_key)
+    if value and value > today:
+        field_label = label or date_key.replace('_', ' ')
+        raise serializers.ValidationError({
+            date_key: f'{field_label.capitalize()} cannot be in the future.'
+        })
+
+    return attrs
 
 
 def get_profile_schema():
@@ -60,9 +109,23 @@ class PersonalInfoSerializer(serializers.Serializer):
     """Serializer for personalInfo section."""
     full_name = serializers.CharField(max_length=255)
     email = serializers.EmailField(max_length=255)
-    phone_number = serializers.CharField(max_length=50, required=False, allow_blank=True)
-    location = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    phone_number = serializers.CharField(max_length=50)
+    location = serializers.CharField(max_length=255)
     portfolio_url = serializers.URLField(max_length=512, required=False, allow_blank=True)
+
+    def validate_email(self, value):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            if value.lower() != request.user.email.lower():
+                raise serializers.ValidationError('Email cannot be changed.')
+        return value.lower()
+
+    def validate_phone_number(self, value):
+        if not PHONE_NUMBER_PATTERN.match(value):
+            raise serializers.ValidationError(
+                'Phone number must use format +<countryCode>-<number> (e.g. +91-9876543210).'
+            )
+        return value
 
 
 class ExperienceSerializer(serializers.Serializer):
@@ -71,10 +134,10 @@ class ExperienceSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=255)
     start_date = serializers.DateField()
     end_date = serializers.DateField(required=False, allow_null=True)
-    description = serializers.CharField(max_length=5000, required=False, allow_blank=True)
+    description = serializers.CharField(max_length=5000, required=True, allow_blank=False)
     
     def validate(self, attrs):
-        """Validate dates: not in future, end_date after start_date."""
+        """Validate dates: not in future, end_date after start_date when present."""
         from datetime import date
         today = date.today()
         
@@ -87,51 +150,103 @@ class ExperienceSerializer(serializers.Serializer):
                 'start_date': 'Start date cannot be in the future.'
             })
         
-        if end_date and end_date > today:
-            raise serializers.ValidationError({
-                'end_date': 'End date cannot be in the future.'
-            })
-        
-        if start_date and end_date and end_date < start_date:
-            raise serializers.ValidationError({
-                'end_date': 'End date must be after start date.'
-            })
+        if end_date is not None:
+            if end_date > today:
+                raise serializers.ValidationError({
+                    'end_date': 'End date cannot be in the future.'
+                })
+            
+            if start_date and end_date < start_date:
+                raise serializers.ValidationError({
+                    'end_date': 'End date must be after start date.'
+                })
         
         return attrs
 
 
 class EducationSerializer(serializers.Serializer):
-    """Serializer for education items with date validation."""
+    """Serializer for education items with date and grade validation."""
+    DEGREE_LEVELS = (
+        "Bachelor's",
+        "Master's",
+        "Doctorate",
+        "Diploma",
+        "Associate",
+        "High School",
+        "Other",
+    )
+    COURSES = (
+        "BTech", "BE", "MTech", "ME", "BSc", "MSc", "MBA", "BCA", "MCA",
+        "BCom", "MCom", "BA", "MA", "PhD", "Other",
+    )
+
     institution = serializers.CharField(max_length=255)
-    degree = serializers.CharField(max_length=255)
+    degree = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    degree_level = serializers.ChoiceField(choices=DEGREE_LEVELS)
+    degree_level_other = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    course = serializers.ChoiceField(choices=COURSES)
+    course_other = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    specialization = serializers.CharField(max_length=255)
+    location = serializers.CharField(max_length=255)
+    grade_type = serializers.ChoiceField(choices=('percentage', 'cgpa'))
+    grade_value = serializers.FloatField()
     start_date = serializers.DateField()
     end_date = serializers.DateField(required=False, allow_null=True)
     description = serializers.CharField(max_length=2000, required=False, allow_blank=True)
-    
+
     def validate(self, attrs):
-        """Validate dates: not in future, end_date after start_date."""
+        """Validate dates, grades, and Other enum fields."""
         from datetime import date
         today = date.today()
-        
+
         start_date = attrs.get('start_date')
         end_date = attrs.get('end_date')
-        
-        # Prevent future dates (non-negotiable per product requirements)
+
         if start_date and start_date > today:
             raise serializers.ValidationError({
                 'start_date': 'Start date cannot be in the future.'
             })
-        
-        if end_date and end_date > today:
+
+        if end_date is not None:
+            if end_date > today:
+                raise serializers.ValidationError({
+                    'end_date': 'End date cannot be in the future.'
+                })
+
+            if start_date and end_date < start_date:
+                raise serializers.ValidationError({
+                    'end_date': 'End date must be after start date.'
+                })
+
+        if attrs.get('degree_level') == 'Other' and not attrs.get('degree_level_other', '').strip():
             raise serializers.ValidationError({
-                'end_date': 'End date cannot be in the future.'
+                'degree_level_other': 'Please specify the degree level.'
             })
-        
-        if start_date and end_date and end_date < start_date:
+
+        if attrs.get('course') == 'Other' and not attrs.get('course_other', '').strip():
             raise serializers.ValidationError({
-                'end_date': 'End date must be after start date.'
+                'course_other': 'Please specify the course.'
             })
-        
+
+        grade_type = attrs.get('grade_type')
+        grade_value = attrs.get('grade_value')
+
+        if grade_value is None:
+            raise serializers.ValidationError({
+                'grade_value': 'Grade value is required.'
+            })
+
+        if grade_type == 'percentage':
+            if grade_value < 0 or grade_value > 100:
+                raise serializers.ValidationError({
+                    'grade_value': 'Percentage must be between 0 and 100.'
+                })
+        elif grade_type == 'cgpa':
+            if grade_value < 0 or grade_value > 10:
+                raise serializers.ValidationError({
+                    'grade_value': 'CGPA must be between 0 and 10.'
+                })
+
         return attrs
 
 
@@ -147,7 +262,7 @@ class ProjectSerializer(serializers.Serializer):
     id = serializers.UUIDField()
     title = serializers.CharField(max_length=200)
     role = serializers.CharField(max_length=150)
-    description = serializers.CharField(max_length=5000, required=False, allow_blank=True)
+    description = serializers.CharField(max_length=5000, required=True, allow_blank=False)
     start_date = serializers.DateField(required=False, allow_null=True)
     end_date = serializers.DateField(required=False, allow_null=True)
     ongoing = serializers.BooleanField()
@@ -157,6 +272,8 @@ class ProjectSerializer(serializers.Serializer):
         allow_empty=True
     )
     link = serializers.URLField(max_length=512, required=False, allow_null=True, allow_blank=True)
+    github_url = serializers.URLField(max_length=512, required=False, allow_null=True, allow_blank=True)
+    deployment_url = serializers.URLField(max_length=512, required=False, allow_null=True, allow_blank=True)
     achievements = serializers.ListField(
         child=serializers.CharField(max_length=500),
         required=False,
@@ -177,12 +294,12 @@ class ProjectSerializer(serializers.Serializer):
                 'start_date': 'Start date cannot be in the future for completed projects.'
             })
         
-        if end_date and not ongoing and end_date > today:
+        if end_date is not None and not ongoing and end_date > today:
             raise serializers.ValidationError({
                 'end_date': 'End date cannot be in the future.'
             })
         
-        if start_date and end_date and end_date < start_date:
+        if start_date and end_date is not None and end_date < start_date:
             raise serializers.ValidationError({
                 'end_date': 'End date must be after start date.'
             })
@@ -194,21 +311,14 @@ class AchievementSerializer(serializers.Serializer):
     """Serializer for achievement items."""
     id = serializers.UUIDField()
     title = serializers.CharField(max_length=250)
-    description = serializers.CharField(max_length=2000, required=False, allow_blank=True)
+    description = serializers.CharField(max_length=2000, required=True, allow_blank=False)
     issuer = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    location = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    is_virtual = serializers.BooleanField(required=False)
     date = serializers.DateField(required=False, allow_null=True)
     
     def validate(self, attrs):
-        """Validate date not in future."""
-        from datetime import date
-        today = date.today()
-        
-        achievement_date = attrs.get('date')
-        if achievement_date and achievement_date > today:
-            raise serializers.ValidationError({
-                'date': 'Date cannot be in the future.'
-            })
-        
+        validate_not_future_date(attrs, 'date', 'date')
         return attrs
 
 
@@ -254,34 +364,13 @@ class VolunteeringSerializer(serializers.Serializer):
     id = serializers.UUIDField()
     organization = serializers.CharField(max_length=255)
     role = serializers.CharField(max_length=255)
+    location = serializers.CharField(max_length=255, required=False, allow_blank=True)
     start_date = serializers.DateField(required=False, allow_null=True)
     end_date = serializers.DateField(required=False, allow_null=True)
-    description = serializers.CharField(max_length=5000, required=False, allow_blank=True)
+    description = serializers.CharField(max_length=5000, required=True, allow_blank=False)
     
     def validate(self, attrs):
-        """Validate dates: not in future, end_date after start_date."""
-        from datetime import date
-        today = date.today()
-        
-        start_date = attrs.get('start_date')
-        end_date = attrs.get('end_date')
-        
-        if start_date and start_date > today:
-            raise serializers.ValidationError({
-                'start_date': 'Start date cannot be in the future.'
-            })
-        
-        if end_date and end_date > today:
-            raise serializers.ValidationError({
-                'end_date': 'End date cannot be in the future.'
-            })
-        
-        if start_date and end_date and end_date < start_date:
-            raise serializers.ValidationError({
-                'end_date': 'End date must be after start date.'
-            })
-        
-        return attrs
+        return validate_date_range(attrs)
 
 
 class PositionSerializer(serializers.Serializer):
@@ -289,34 +378,13 @@ class PositionSerializer(serializers.Serializer):
     id = serializers.UUIDField()
     title = serializers.CharField(max_length=255)
     organization = serializers.CharField(max_length=255)
+    location = serializers.CharField(max_length=255, required=False, allow_blank=True)
     start_date = serializers.DateField()
     end_date = serializers.DateField(required=False, allow_null=True)
-    description = serializers.CharField(max_length=5000, required=False, allow_blank=True)
+    description = serializers.CharField(max_length=5000, required=True, allow_blank=False)
     
     def validate(self, attrs):
-        """Validate dates: not in future, end_date after start_date."""
-        from datetime import date
-        today = date.today()
-        
-        start_date = attrs.get('start_date')
-        end_date = attrs.get('end_date')
-        
-        if start_date and start_date > today:
-            raise serializers.ValidationError({
-                'start_date': 'Start date cannot be in the future.'
-            })
-        
-        if end_date and end_date > today:
-            raise serializers.ValidationError({
-                'end_date': 'End date cannot be in the future.'
-            })
-        
-        if start_date and end_date and end_date < start_date:
-            raise serializers.ValidationError({
-                'end_date': 'End date must be after start date.'
-            })
-        
-        return attrs
+        return validate_date_range(attrs)
 
 
 class CareerBreakSerializer(serializers.Serializer):
@@ -325,32 +393,10 @@ class CareerBreakSerializer(serializers.Serializer):
     start_date = serializers.DateField()
     end_date = serializers.DateField(required=False, allow_null=True)
     reason = serializers.ChoiceField(choices=['parental', 'health', 'travel', 'education', 'other'])
-    description = serializers.CharField(max_length=2000, required=False, allow_blank=True)
+    description = serializers.CharField(max_length=2000, required=True, allow_blank=False)
     
     def validate(self, attrs):
-        """Validate dates: not in future, end_date after start_date."""
-        from datetime import date
-        today = date.today()
-        
-        start_date = attrs.get('start_date')
-        end_date = attrs.get('end_date')
-        
-        if start_date and start_date > today:
-            raise serializers.ValidationError({
-                'start_date': 'Start date cannot be in the future.'
-            })
-        
-        if end_date and end_date > today:
-            raise serializers.ValidationError({
-                'end_date': 'End date cannot be in the future.'
-            })
-        
-        if start_date and end_date and end_date < start_date:
-            raise serializers.ValidationError({
-                'end_date': 'End date must be after start date.'
-            })
-        
-        return attrs
+        return validate_date_range(attrs)
 
 
 class LicenseSerializer(serializers.Serializer):
@@ -359,20 +405,29 @@ class LicenseSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255)
     issuer = serializers.CharField(max_length=255)
     license_number = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    awarded_date = serializers.DateField(required=False, allow_null=True)
+    expiration_date = serializers.DateField(required=False, allow_null=True)
     date = serializers.DateField(required=False, allow_null=True)
     url = serializers.URLField(max_length=512, required=False, allow_null=True, allow_blank=True)
     
     def validate(self, attrs):
-        """Validate date not in future."""
         from datetime import date
         today = date.today()
-        
-        license_date = attrs.get('date')
-        if license_date and license_date > today:
+
+        for field in ('date', 'awarded_date'):
+            value = attrs.get(field)
+            if value and value > today:
+                raise serializers.ValidationError({
+                    field: f'{field.replace("_", " ").capitalize()} cannot be in the future.'
+                })
+
+        awarded_date = attrs.get('awarded_date') or attrs.get('date')
+        expiration_date = attrs.get('expiration_date')
+        if awarded_date and expiration_date is not None and expiration_date < awarded_date:
             raise serializers.ValidationError({
-                'date': 'Date cannot be in the future.'
+                'expiration_date': 'Expiration date must be after awarded date.'
             })
-        
+
         return attrs
 
 
@@ -381,48 +436,112 @@ class TrainingSerializer(serializers.Serializer):
     id = serializers.UUIDField()
     title = serializers.CharField(max_length=255)
     provider = serializers.CharField(max_length=255)
+    start_date = serializers.DateField(required=False, allow_null=True)
+    end_date = serializers.DateField(required=False, allow_null=True)
+    venue = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    is_virtual = serializers.BooleanField(required=False)
     date = serializers.DateField(required=False, allow_null=True)
     certificate_url = serializers.URLField(max_length=512, required=False, allow_null=True, allow_blank=True)
-    description = serializers.CharField(max_length=2000, required=False, allow_blank=True)
+    description = serializers.CharField(max_length=2000, required=True, allow_blank=False)
     
     def validate(self, attrs):
-        """Validate date not in future."""
-        from datetime import date
-        today = date.today()
-        
-        training_date = attrs.get('date')
-        if training_date and training_date > today:
-            raise serializers.ValidationError({
-                'date': 'Date cannot be in the future.'
-            })
-        
-        return attrs
+        validate_not_future_date(attrs, 'date', 'date')
+        return validate_date_range(attrs)
+
+
+class PublicationAuthorSerializer(serializers.Serializer):
+    """Serializer for publication author entries."""
+    name = serializers.CharField(max_length=255)
+    affiliation = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    order = serializers.IntegerField(required=False, min_value=1)
+    is_corresponding = serializers.BooleanField(required=False)
+    orcid = serializers.CharField(max_length=50, required=False, allow_blank=True)
 
 
 class PublicationSerializer(serializers.Serializer):
     """Serializer for publication items."""
     id = serializers.UUIDField()
     title = serializers.CharField(max_length=500)
-    authors = serializers.ListField(
-        child=serializers.CharField(max_length=255),
-        min_length=1
-    )
-    venue = serializers.CharField(max_length=255)
+    subtitle = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    authors = PublicationAuthorSerializer(many=True, min_length=1)
+    doi = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    pmid = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    pmcid = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    isbn = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    issn = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    arxiv_id = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    editor = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    venue = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    volume = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    issue = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    page_range = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    article_number = serializers.CharField(max_length=50, required=False, allow_blank=True)
     date = serializers.DateField(required=False, allow_null=True)
+    online_date = serializers.DateField(required=False, allow_null=True)
+    accepted_date = serializers.DateField(required=False, allow_null=True)
+    publication_year = serializers.IntegerField(required=False, min_value=1000, max_value=9999)
+    publication_month = serializers.IntegerField(required=False, min_value=1, max_value=12)
+    keywords = serializers.ListField(
+        child=serializers.CharField(max_length=100),
+        required=False,
+        allow_empty=True
+    )
+    subject_categories = serializers.ListField(
+        child=serializers.CharField(max_length=100),
+        required=False,
+        allow_empty=True
+    )
     url = serializers.URLField(max_length=512, required=False, allow_null=True, allow_blank=True)
+    landing_page_url = serializers.URLField(max_length=512, required=False, allow_null=True, allow_blank=True)
+    pdf_url = serializers.URLField(max_length=512, required=False, allow_null=True, allow_blank=True)
+    repository_url = serializers.URLField(max_length=512, required=False, allow_null=True, allow_blank=True)
+    version_label = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    version_date = serializers.DateField(required=False, allow_null=True)
+    funding_sources = serializers.ListField(
+        child=serializers.CharField(max_length=255),
+        required=False,
+        allow_empty=True
+    )
+    grant_numbers = serializers.ListField(
+        child=serializers.CharField(max_length=100),
+        required=False,
+        allow_empty=True
+    )
+    trial_registry = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    ethics_approvals = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    copyright_holder = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    license = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    reuse_permissions = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    citation_count = serializers.IntegerField(required=False, min_value=0)
+    altmetric_score = serializers.FloatField(required=False, min_value=0)
+    language = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    publication_type = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    document_type = serializers.CharField(max_length=100, required=False, allow_blank=True)
     abstract = serializers.CharField(max_length=5000, required=False, allow_blank=True)
     
     def validate(self, attrs):
-        """Validate date not in future."""
         from datetime import date
         today = date.today()
-        
-        pub_date = attrs.get('date')
-        if pub_date and pub_date > today:
-            raise serializers.ValidationError({
-                'date': 'Date cannot be in the future.'
-            })
-        
+
+        for field in ('date', 'online_date', 'accepted_date', 'version_date'):
+            value = attrs.get(field)
+            if value and value > today:
+                raise serializers.ValidationError({
+                    field: f'{field.replace("_", " ").capitalize()} cannot be in the future.'
+                })
+
+        if attrs.get('accepted_date') and attrs.get('date'):
+            if attrs['date'] < attrs['accepted_date']:
+                raise serializers.ValidationError({
+                    'date': 'Publication date must be on or after accepted date.'
+                })
+
+        if attrs.get('online_date') and attrs.get('date'):
+            if attrs['online_date'] > attrs['date']:
+                raise serializers.ValidationError({
+                    'online_date': 'Online date cannot be after publication date.'
+                })
+
         return attrs
 
 
@@ -432,33 +551,96 @@ class PatentSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=500)
     patent_number = serializers.CharField(max_length=100)
     status = serializers.ChoiceField(choices=['filed', 'granted', 'pending'])
+    abstract = serializers.CharField(max_length=5000, required=False, allow_blank=True)
+    keywords = serializers.ListField(
+        child=serializers.CharField(max_length=100),
+        required=False,
+        allow_empty=True
+    )
+    application_number = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    publication_number = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    inventors = serializers.ListField(
+        child=serializers.CharField(max_length=255),
+        required=False,
+        allow_empty=True
+    )
+    applicants = serializers.ListField(
+        child=serializers.CharField(max_length=255),
+        required=False,
+        allow_empty=True
+    )
+    assignees = serializers.ListField(
+        child=serializers.CharField(max_length=255),
+        required=False,
+        allow_empty=True
+    )
     filing_date = serializers.DateField(required=False, allow_null=True)
+    priority_date = serializers.DateField(required=False, allow_null=True)
+    publication_date = serializers.DateField(required=False, allow_null=True)
     grant_date = serializers.DateField(required=False, allow_null=True)
+    patent_office = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    family_id = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    ipc_codes = serializers.ListField(
+        child=serializers.CharField(max_length=50),
+        required=False,
+        allow_empty=True
+    )
+    cpc_codes = serializers.ListField(
+        child=serializers.CharField(max_length=50),
+        required=False,
+        allow_empty=True
+    )
+    us_classifications = serializers.ListField(
+        child=serializers.CharField(max_length=50),
+        required=False,
+        allow_empty=True
+    )
+    kind_code = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    legal_status = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    pct_number = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    representative = serializers.CharField(max_length=255, required=False, allow_blank=True)
     url = serializers.URLField(max_length=512, required=False, allow_null=True, allow_blank=True)
+    drawings_url = serializers.URLField(max_length=512, required=False, allow_null=True, allow_blank=True)
+    pdf_url = serializers.URLField(max_length=512, required=False, allow_null=True, allow_blank=True)
+    forward_citations = serializers.IntegerField(required=False, min_value=0)
+    family_size = serializers.IntegerField(required=False, min_value=0)
+    publication_languages = serializers.ListField(
+        child=serializers.CharField(max_length=100),
+        required=False,
+        allow_empty=True
+    )
     
     def validate(self, attrs):
-        """Validate dates: not in future, grant_date after filing_date."""
         from datetime import date
         today = date.today()
-        
+
+        for field in ('filing_date', 'priority_date', 'publication_date', 'grant_date'):
+            value = attrs.get(field)
+            if value and value > today:
+                raise serializers.ValidationError({
+                    field: f'{field.replace("_", " ").capitalize()} cannot be in the future.'
+                })
+
         filing_date = attrs.get('filing_date')
+        priority_date = attrs.get('priority_date')
+        publication_date = attrs.get('publication_date')
         grant_date = attrs.get('grant_date')
-        
-        if filing_date and filing_date > today:
+
+        if priority_date and filing_date and priority_date > filing_date:
             raise serializers.ValidationError({
-                'filing_date': 'Filing date cannot be in the future.'
+                'priority_date': 'Priority date cannot be after filing date.'
             })
-        
-        if grant_date and grant_date > today:
+
+        if filing_date and publication_date and publication_date < filing_date:
             raise serializers.ValidationError({
-                'grant_date': 'Grant date cannot be in the future.'
+                'publication_date': 'Publication date must be on or after filing date.'
             })
-        
+
         if filing_date and grant_date and grant_date < filing_date:
             raise serializers.ValidationError({
-                'grant_date': 'Grant date must be after filing date.'
+                'grant_date': 'Grant date must be on or after filing date.'
             })
-        
+
         return attrs
 
 
@@ -510,8 +692,12 @@ class TestScoreSerializer(serializers.Serializer):
 class LanguageSerializer(serializers.Serializer):
     """Serializer for language items."""
     language = serializers.CharField(max_length=100)
+    read_proficiency = serializers.ChoiceField(choices=LANGUAGE_PROFICIENCY_CHOICES)
+    write_proficiency = serializers.ChoiceField(choices=LANGUAGE_PROFICIENCY_CHOICES)
+    speak_proficiency = serializers.ChoiceField(choices=LANGUAGE_PROFICIENCY_CHOICES)
     proficiency = serializers.ChoiceField(
-        choices=['native', 'full_professional', 'limited_professional', 'conversational', 'basic']
+        choices=LEGACY_LANGUAGE_PROFICIENCY_CHOICES,
+        required=False
     )
     certification = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
@@ -521,34 +707,13 @@ class OrganizationSerializer(serializers.Serializer):
     id = serializers.UUIDField()
     name = serializers.CharField(max_length=255)
     role = serializers.CharField(max_length=255)
+    location = serializers.CharField(max_length=255, required=False, allow_blank=True)
     start_date = serializers.DateField(required=False, allow_null=True)
     end_date = serializers.DateField(required=False, allow_null=True)
-    description = serializers.CharField(max_length=2000, required=False, allow_blank=True)
+    description = serializers.CharField(max_length=2000, required=True, allow_blank=False)
     
     def validate(self, attrs):
-        """Validate dates: not in future, end_date after start_date."""
-        from datetime import date
-        today = date.today()
-        
-        start_date = attrs.get('start_date')
-        end_date = attrs.get('end_date')
-        
-        if start_date and start_date > today:
-            raise serializers.ValidationError({
-                'start_date': 'Start date cannot be in the future.'
-            })
-        
-        if end_date and end_date > today:
-            raise serializers.ValidationError({
-                'end_date': 'End date cannot be in the future.'
-            })
-        
-        if start_date and end_date and end_date < start_date:
-            raise serializers.ValidationError({
-                'end_date': 'End date must be after start date.'
-            })
-        
-        return attrs
+        return validate_date_range(attrs)
 
 
 class ContactInfoSerializer(serializers.Serializer):
@@ -804,7 +969,7 @@ class ProfileCreateUpdateSerializer(serializers.Serializer):
     """
     
     personalInfo = PersonalInfoSerializer(required=False)
-    summary = serializers.CharField(max_length=2500, required=False, allow_blank=True)
+    summary = serializers.CharField(max_length=2500, min_length=10, required=True, allow_blank=False)
     experience = ExperienceSerializer(many=True, required=False, max_length=25)  # Max 25 jobs
     education = EducationSerializer(many=True, required=False, max_length=10)    # Max 10 degrees
     skills = serializers.ListField(
@@ -850,10 +1015,14 @@ class ProfileCreateUpdateSerializer(serializers.Serializer):
         request = self.context.get('request')
         
         if request and request.method == 'PUT':
-            # Full replacement - require only personalInfo (minimal usable profile)
+            # Full replacement - require personalInfo and summary
             if 'personalInfo' not in attrs:
                 raise serializers.ValidationError({
                     'personalInfo': ['This field is required.']
+                })
+            if 'summary' not in attrs:
+                raise serializers.ValidationError({
+                    'summary': ['This field is required.']
                 })
             
             # Validate against JSON schema
@@ -883,3 +1052,17 @@ class ProfileCreateUpdateSerializer(serializers.Serializer):
         """Override to handle date serialization."""
         validated = super().to_internal_value(data)
         return self._serialize_for_validation(validated)
+
+
+class ProfileSaveEventSerializer(serializers.ModelSerializer):
+    """Serializer for profile save history events."""
+
+    label = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProfileSaveEvent
+        fields = ['sections', 'saved_at', 'label']
+
+    def get_label(self, obj) -> str:
+        from app.profiles.services import build_save_event_label
+        return build_save_event_label(obj.sections)

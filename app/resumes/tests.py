@@ -94,8 +94,12 @@ def job_description(user_with_profile):
     """Create a job description."""
     return JobDescription.objects.create(
         user=user_with_profile,
+        role_name='Senior Software Engineer',
         text='We are looking for a Senior Software Engineer with Python and Django experience.'
     )
+
+
+DEFAULT_SECTIONS = ['personalInfo', 'summary', 'experience', 'education', 'skills']
 
 
 # =============================================================================
@@ -112,22 +116,41 @@ class TestJobDescriptionCreate:
         
         response = api_client.post(
             '/api/v1/jds',
-            {'text': 'Looking for a Python developer with 5+ years experience.'},
+            {
+                'role_name': 'Senior Software Engineer',
+                'text': 'Looking for a Python developer with 5+ years experience in backend systems.',
+            },
             format='json'
         )
         
         assert response.status_code == status.HTTP_201_CREATED
         assert 'id' in response.data
         assert 'expires_at' in response.data
-        assert response.data['text'] == 'Looking for a Python developer with 5+ years experience.'
+        assert response.data['role_name'] == 'Senior Software Engineer'
+        assert response.data['text'] == 'Looking for a Python developer with 5+ years experience in backend systems.'
     
+    def test_create_jd_requires_role_name(self, api_client, user_with_profile):
+        """Test creating JD without role_name fails."""
+        api_client.force_authenticate(user=user_with_profile)
+
+        response = api_client.post(
+            '/api/v1/jds',
+            {'text': 'Looking for a Python developer with 5+ years experience in backend systems.'},
+            format='json',
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
     def test_create_jd_sets_ttl(self, api_client, user_with_profile):
         """Test that JD has correct TTL set."""
         api_client.force_authenticate(user=user_with_profile)
         
         response = api_client.post(
             '/api/v1/jds',
-            {'text': 'Test job description'},
+            {
+                'role_name': 'Backend Engineer',
+                'text': 'Test job description with enough characters to pass validation checks easily.',
+            },
             format='json'
         )
         
@@ -144,7 +167,10 @@ class TestJobDescriptionCreate:
         
         response = api_client.post(
             '/api/v1/jds',
-            {'text': '   '},  # Whitespace only
+            {
+                'role_name': 'Engineer',
+                'text': '   ',
+            },
             format='json'
         )
         
@@ -215,7 +241,8 @@ class TestResumeGenerationCreate:
             '/api/v1/resumes',
             {
                 'job_description_id': str(job_description.id),
-                'template_id': template.id
+                'template_id': template.id,
+                'sections': DEFAULT_SECTIONS,
             },
             format='json'
         )
@@ -233,7 +260,8 @@ class TestResumeGenerationCreate:
             '/api/v1/resumes',
             {
                 'job_description_id': str(uuid.uuid4()),
-                'template_id': template.id
+                'template_id': template.id,
+                'sections': DEFAULT_SECTIONS,
             },
             format='json'
         )
@@ -248,7 +276,8 @@ class TestResumeGenerationCreate:
             '/api/v1/resumes',
             {
                 'job_description_id': str(job_description.id),
-                'template_id': 'nonexistent-template'
+                'template_id': 'nonexistent-template',
+                'sections': DEFAULT_SECTIONS,
             },
             format='json'
         )
@@ -265,7 +294,8 @@ class TestResumeGenerationCreate:
             '/api/v1/resumes',
             {
                 'job_description_id': str(job_description.id),
-                'template_id': template.id
+                'template_id': template.id,
+                'sections': DEFAULT_SECTIONS,
             },
             format='json',
             HTTP_IDEMPOTENCY_KEY=idempotency_key
@@ -276,7 +306,8 @@ class TestResumeGenerationCreate:
             '/api/v1/resumes',
             {
                 'job_description_id': str(job_description.id),
-                'template_id': template.id
+                'template_id': template.id,
+                'sections': DEFAULT_SECTIONS,
             },
             format='json',
             HTTP_IDEMPOTENCY_KEY=idempotency_key
@@ -286,6 +317,204 @@ class TestResumeGenerationCreate:
         assert response2.status_code == status.HTTP_202_ACCEPTED
         # Should return the same generation request
         assert response1.data['id'] == response2.data['id']
+
+    def test_create_generation_filters_sections(self, api_client, user_with_profile, job_description, template):
+        """Test that selected sections filter the stored profile snapshot."""
+        api_client.force_authenticate(user=user_with_profile)
+
+        response = api_client.post(
+            '/api/v1/resumes',
+            {
+                'job_description_id': str(job_description.id),
+                'template_id': template.id,
+                'sections': ['experience'],
+            },
+            format='json',
+        )
+
+        assert response.status_code == status.HTTP_202_ACCEPTED
+        request = ResumeGenerationRequest.objects.get(id=response.data['id'])
+        assert set(request.profile_snapshot.keys()) == {'personalInfo', 'experience'}
+        assert request.selected_sections == ['experience']
+
+    def test_create_generation_invalid_section(self, api_client, user_with_profile, job_description, template):
+        """Test generation with invalid section key fails."""
+        api_client.force_authenticate(user=user_with_profile)
+
+        response = api_client.post(
+            '/api/v1/resumes',
+            {
+                'job_description_id': str(job_description.id),
+                'template_id': template.id,
+                'sections': ['not_a_real_section'],
+            },
+            format='json',
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_create_generation_rejects_empty_section_data(
+        self, api_client, user_with_profile, job_description, template
+    ):
+        """Reject sections that have no data in the user profile."""
+        api_client.force_authenticate(user=user_with_profile)
+
+        response = api_client.post(
+            '/api/v1/resumes',
+            {
+                'job_description_id': str(job_description.id),
+                'template_id': template.id,
+                'sections': ['projects'],
+            },
+            format='json',
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+class TestTemplateBasedGeneration:
+    """Tests for template-based generation wiring and validation."""
+
+    def test_profile_section_has_data(self, user_with_profile):
+        from app.resumes.services import profile_section_has_data
+
+        snapshot = user_with_profile.profile.data
+        assert profile_section_has_data(snapshot, 'experience') is True
+        assert profile_section_has_data(snapshot, 'projects') is False
+        assert profile_section_has_data(snapshot, 'personalInfo') is True
+
+    def test_validate_latex_section_boundaries_rejects_unselected(
+        self, user_with_profile, job_description, template
+    ):
+        from app.resumes.services import ResumeGenerationService
+        from app.common.exceptions import ModelOutputInvalidException
+
+        request = ResumeGenerationRequest.objects.create(
+            user=user_with_profile,
+            job_description=job_description,
+            template_id=template.id,
+            profile_snapshot={'personalInfo': user_with_profile.profile.data['personalInfo']},
+            selected_sections=['experience'],
+        )
+
+        latex_with_education = r"""\documentclass{article}
+\begin{document}
+\resumeHeader{Jane Doe}
+\resumeSectionTitle{PROFESSIONAL EXPERIENCE}
+\begin{itemize}
+\resumeItem{TechCorp}
+\end{itemize}
+\resumeSectionTitle{EDUCATION}
+\begin{itemize}
+\resumeItem{State University}
+\end{itemize}
+\end{document}"""
+
+        with pytest.raises(ModelOutputInvalidException) as exc_info:
+            ResumeGenerationService.validate_ai_output(
+                request, latex_with_education, []
+            )
+
+        assert 'education' in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_ai_agent_client_payload_includes_template_and_sections(self):
+        from unittest.mock import AsyncMock, patch, MagicMock
+        from app.common.clients.ai_agent import AIAgentClient
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'latex_source': r'\documentclass{article}\begin{document}x\end{document}',
+            'modifications': ['test'],
+        }
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+
+        client = AIAgentClient()
+        with patch('httpx.AsyncClient', return_value=mock_client):
+            await client.generate_resume(
+                profile_data={'personalInfo': {'full_name': 'Jane Doe'}, 'experience': []},
+                job_description_text='Python role',
+                template_content='\\documentclass{article}',
+                template_id='main',
+                selected_sections=['experience'],
+            )
+
+        call_kwargs = mock_client.post.call_args
+        payload = call_kwargs.kwargs['json']
+        assert payload['template'] == '\\documentclass{article}'
+        assert payload['template_id'] == 'main'
+        assert payload['selected_sections'] == ['experience']
+        assert 'profile' in payload
+        assert payload['job_description'] == 'Python role'
+
+
+@pytest.mark.django_db
+class TestResumeGenerationCancel:
+    """Tests for POST /resumes/{id}/cancel"""
+
+    def test_cancel_pending_generation(self, api_client, user_with_profile, job_description, template):
+        api_client.force_authenticate(user=user_with_profile)
+
+        create_response = api_client.post(
+            '/api/v1/resumes',
+            {
+                'job_description_id': str(job_description.id),
+                'template_id': template.id,
+                'sections': DEFAULT_SECTIONS,
+            },
+            format='json',
+        )
+        generation_id = create_response.data['id']
+
+        response = api_client.post(f'/api/v1/resumes/{generation_id}/cancel')
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['status'] == 'cancelled'
+        assert 'cancelled' in (response.data['failure_reason'] or '').lower()
+
+    def test_cancel_completed_generation_conflict(self, api_client, user_with_profile, job_description, template):
+        api_client.force_authenticate(user=user_with_profile)
+
+        request = ResumeGenerationRequest.objects.create(
+            user=user_with_profile,
+            job_description=job_description,
+            template_id=template.id,
+            status=ResumeGenerationRequest.STATUS_SUCCESS,
+            profile_snapshot={'personalInfo': {}},
+            selected_sections=DEFAULT_SECTIONS,
+        )
+
+        response = api_client.post(f'/api/v1/resumes/{request.id}/cancel')
+
+        assert response.status_code == status.HTTP_409_CONFLICT
+
+
+@pytest.mark.django_db
+class TestResumeGenerationTaskCancellation:
+    """Tests for Celery task cancellation behavior."""
+
+    def test_task_skips_cancelled_request(self, user_with_profile, job_description, template):
+        request = ResumeGenerationRequest.objects.create(
+            user=user_with_profile,
+            job_description=job_description,
+            template_id=template.id,
+            status=ResumeGenerationRequest.STATUS_CANCELLED,
+            profile_snapshot={'personalInfo': {}},
+            selected_sections=DEFAULT_SECTIONS,
+        )
+
+        from app.resumes.tasks import process_resume_generation
+
+        process_resume_generation(str(request.id))
+
+        request.refresh_from_db()
+        assert request.status == ResumeGenerationRequest.STATUS_CANCELLED
 
 
 @pytest.mark.django_db
@@ -328,7 +557,6 @@ class TestResumeGenerationStatus:
 # Hallucination Detection Tests
 # =============================================================================
 
-@pytest.mark.django_db
 class TestHallucinationDetection:
     """Tests for hallucination detection algorithm.
     
@@ -340,7 +568,7 @@ class TestHallucinationDetection:
     """
     
     def test_no_hallucination_detected(self):
-        """Test that valid LaTeX passes hallucination check."""
+        """Test that valid template macro content passes hallucination check."""
         profile_data = {
             'personalInfo': {
                 'full_name': 'Jane Doe',
@@ -357,25 +585,27 @@ class TestHallucinationDetection:
             'skills': ['Python', 'Django'],
             'certifications': []
         }
-        
+
         latex_source = r"""
-        \textbf{TechCorp}
-        Senior Engineer
-        
-        \textbf{State University}
-        Bachelor of Science
+        \documentclass{article}
+        \begin{document}
+        \resumeHeader{Jane Doe}
+        \resumeEntryHeading{Engineer}{2020 -- Present}{TechCorp}{New York}
+        \resumeEntryHeading{BS CS}{2012 -- 2016}{State University}{}
+        \end{document}
         """
-        
-        is_hallucinated, entity = HallucinationDetector.detect_hallucination(
+
+        is_hallucinated, message = HallucinationDetector.detect_hallucination(
             profile_data, latex_source
         )
-        
+
         assert not is_hallucinated
-        assert entity is None
-    
+        assert message is None
+
     def test_hallucination_detected_company(self):
-        """Test that invented company name is detected."""
+        """Test that invented company in entry heading is detected."""
         profile_data = {
+            'personalInfo': {'full_name': 'Jane Doe'},
             'experience': [
                 {'company': 'TechCorp', 'title': 'Engineer'}
             ],
@@ -383,26 +613,28 @@ class TestHallucinationDetection:
             'skills': [],
             'certifications': []
         }
-        
+
         latex_source = r"""
-        \textbf{TechCorp}
-        Engineer
-        
-        \textbf{InventedCompany Inc}
-        Another Role
+        \documentclass{article}
+        \begin{document}
+        \resumeHeader{Jane Doe}
+        \resumeEntryHeading{Engineer}{2020 -- Present}{TechCorp}{}
+        \resumeEntryHeading{Engineer}{2018 -- 2019}{InventedCompany Inc}{}
+        \end{document}
         """
-        
-        is_hallucinated, entity = HallucinationDetector.detect_hallucination(
+
+        is_hallucinated, message = HallucinationDetector.detect_hallucination(
             profile_data, latex_source
         )
-        
-        # Should detect the invented company
+
         assert is_hallucinated
-        assert entity is not None
-    
+        assert message is not None
+        assert 'inventedcompany' in message.lower() or 'InventedCompany' in message
+
     def test_hallucination_detected_university(self):
-        """Test that invented university is detected."""
+        """Test that invented institution in entry heading is detected."""
         profile_data = {
+            'personalInfo': {'full_name': 'Jane Doe'},
             'experience': [],
             'education': [
                 {'institution': 'State University', 'degree': 'BS'}
@@ -410,22 +642,26 @@ class TestHallucinationDetection:
             'skills': [],
             'certifications': []
         }
-        
+
         latex_source = r"""
-        \textbf{State University}
-        
-        \institution{University of Mars}
+        \documentclass{article}
+        \begin{document}
+        \resumeHeader{Jane Doe}
+        \resumeEntryHeading{BS}{2012 -- 2016}{State University}{}
+        \resumeEntryHeading{PhD}{2020 -- 2024}{University of Mars}{}
+        \end{document}
         """
-        
-        is_hallucinated, entity = HallucinationDetector.detect_hallucination(
+
+        is_hallucinated, message = HallucinationDetector.detect_hallucination(
             profile_data, latex_source
         )
-        
+
         assert is_hallucinated
-    
+
     def test_company_suffix_variations_allowed(self):
         """Test that company name suffix variations (Inc, LLC) are allowed."""
         profile_data = {
+            'personalInfo': {'full_name': 'Jane Doe'},
             'experience': [
                 {'company': 'TechCorp', 'title': 'Engineer'}
             ],
@@ -433,22 +669,25 @@ class TestHallucinationDetection:
             'skills': [],
             'certifications': []
         }
-        
-        # AI might add "Inc" suffix - this should be allowed
+
         latex_source = r"""
-        \textbf{TechCorp Inc}
-        Engineer
+        \documentclass{article}
+        \begin{document}
+        \resumeHeader{Jane Doe}
+        \resumeEntryHeading{Engineer}{2020 -- Present}{TechCorp Inc}{}
+        \end{document}
         """
-        
-        is_hallucinated, entity = HallucinationDetector.detect_hallucination(
+
+        is_hallucinated, message = HallucinationDetector.detect_hallucination(
             profile_data, latex_source
         )
-        
+
         assert not is_hallucinated
-    
+
     def test_partial_match_allowed(self):
-        """Test that partial matches of profile entities are allowed."""
+        """Test that partial matches of profile org names are allowed."""
         profile_data = {
+            'personalInfo': {'full_name': 'Jane Doe'},
             'experience': [
                 {'company': 'Acme Corporation International', 'title': 'Engineer'}
             ],
@@ -456,86 +695,164 @@ class TestHallucinationDetection:
             'skills': [],
             'certifications': []
         }
-        
-        # AI might abbreviate - using "Acme Corporation" should be allowed
+
         latex_source = r"""
-        \textbf{Acme Corporation}
-        Engineer
+        \documentclass{article}
+        \begin{document}
+        \resumeHeader{Jane Doe}
+        \resumeEntryHeading{Engineer}{2020 -- Present}{Acme Corporation}{}
+        \end{document}
         """
-        
-        is_hallucinated, entity = HallucinationDetector.detect_hallucination(
+
+        is_hallucinated, message = HallucinationDetector.detect_hallucination(
             profile_data, latex_source
         )
-        
+
         assert not is_hallucinated
-    
-    def test_skills_from_profile_allowed(self):
-        """Test that skills from profile are allowed in output."""
+
+    def test_ats_skill_phrase_allowed(self):
+        """JD-tailored skill phrases in tag lists should not trigger hallucination."""
         profile_data = {
-            'experience': [],
-            'education': [],
-            'skills': ['Python', 'Django', 'React', 'TypeScript'],
-            'certifications': []
+            'personalInfo': {'full_name': 'Jane Doe'},
+            'skills': ['EDR', 'Python'],
         }
-        
         latex_source = r"""
-        \textbf{Skills}
-        Python, Django, React, TypeScript
+        \documentclass{article}
+        \begin{document}
+        \resumeHeader{Jane Doe}
+        \section*{Skills}
+        \begin{itemize}
+        \resumeTagList{Endpoint Protection, EDR, Python}
+        \end{itemize}
+        \end{document}
         """
-        
-        is_hallucinated, entity = HallucinationDetector.detect_hallucination(
+        is_hallucinated, message = HallucinationDetector.detect_hallucination(
             profile_data, latex_source
         )
-        
-        assert not is_hallucinated
-    
-    def test_fake_certification_detected(self):
-        """Test that invented certifications are detected."""
+        assert not is_hallucinated, message
+
+    def test_jd_keyword_in_summary_allowed(self):
+        """Summary tailoring with JD keywords should not trigger hallucination."""
         profile_data = {
-            'experience': [],
-            'education': [],
-            'skills': [],
+            'personalInfo': {'full_name': 'Jane Doe'},
+            'summary': 'Security engineer with EDR experience.',
+        }
+        latex_source = r"""
+        \documentclass{article}
+        \begin{document}
+        \resumeHeader{Jane Doe}
+        \section*{Summary}
+        \small Security professional specializing in endpoint protection and EDR.
+        \end{document}
+        """
+        is_hallucinated, message = HallucinationDetector.detect_hallucination(
+            profile_data, latex_source
+        )
+        assert not is_hallucinated, message
+
+    def test_resumeItem_jd_tailoring_allowed(self):
+        """Bullet tailoring with JD keywords should not trigger hallucination."""
+        profile_data = {
+            'personalInfo': {'full_name': 'Jane Doe'},
+            'experience': [
+                {'company': 'TechCorp', 'title': 'Engineer', 'description': 'Managed EDR platform.'}
+            ],
+        }
+        latex_source = r"""
+        \documentclass{article}
+        \begin{document}
+        \resumeHeader{Jane Doe}
+        \section*{Experience}
+        \begin{itemize}
+        \resumeEntryHeading{Engineer}{2020 -- Present}{TechCorp}{}
+        \begin{itemize}
+        \resumeItem{Led endpoint protection rollout across enterprise endpoints.}
+        \end{itemize}
+        \end{itemize}
+        \end{document}
+        """
+        is_hallucinated, message = HallucinationDetector.detect_hallucination(
+            profile_data, latex_source
+        )
+        assert not is_hallucinated, message
+
+    def test_certification_in_resume_item_not_strictly_checked(self):
+        """Invented certifications in resumeItem are not checked (macro-only tradeoff)."""
+        profile_data = {
+            'personalInfo': {'full_name': 'Jane Doe'},
             'certifications': [
                 {'name': 'AWS Solutions Architect', 'issuing_organization': 'Amazon'}
             ]
         }
-        
+
         latex_source = r"""
-        \textbf{AWS Solutions Architect} - Amazon
-        
-        \textbf{Google Cloud Expert} - Google
+        \documentclass{article}
+        \begin{document}
+        \resumeHeader{Jane Doe}
+        \section*{Certifications}
+        \begin{itemize}
+        \resumeItem{Google Cloud Expert — Google}
+        \end{itemize}
+        \end{document}
         """
-        
-        is_hallucinated, entity = HallucinationDetector.detect_hallucination(
+
+        is_hallucinated, message = HallucinationDetector.detect_hallucination(
             profile_data, latex_source
         )
-        
-        # Should detect the invented Google certification
-        assert is_hallucinated
-    
-    def test_empty_profile_rejects_all_entities(self):
-        """Test that an empty profile rejects any entity mentions."""
+
+        assert not is_hallucinated
+
+    def test_empty_profile_rejects_invented_entry_heading_org(self):
+        """Empty profile rejects invented organizations in entry headings."""
         profile_data = {
+            'personalInfo': {'full_name': 'Jane Doe'},
             'experience': [],
             'education': [],
             'skills': [],
             'certifications': []
         }
-        
+
         latex_source = r"""
-        \textbf{Google}
-        Software Engineer
+        \documentclass{article}
+        \begin{document}
+        \resumeHeader{Jane Doe}
+        \resumeEntryHeading{Engineer}{2020 -- Present}{Google}{}
+        \end{document}
         """
-        
+
+        is_hallucinated, message = HallucinationDetector.detect_hallucination(
+            profile_data, latex_source
+        )
+
+        assert is_hallucinated
+    
+    def test_patent_legal_status_label_not_flagged(self):
+        """Patent field labels like Legal Status should not trigger hallucination."""
+        profile_data = {
+            'patents': [{
+                'title': 'Distributed Cache System',
+                'patent_number': 'US12345678',
+                'status': 'granted',
+                'legal_status': 'active',
+            }],
+        }
+        latex_source = r"""
+        \documentclass{article}
+        \begin{document}
+        \section*{Patents}
+        \textbf{Distributed Cache System}
+        Legal Status: Active
+        \end{document}
+        """
         is_hallucinated, entity = HallucinationDetector.detect_hallucination(
             profile_data, latex_source
         )
-        
-        assert is_hallucinated
-    
+        assert not is_hallucinated, f"Unexpected hallucination: {entity}"
+
     def test_common_section_headers_ignored(self):
-        """Test that common section headers are not flagged as hallucinations."""
+        """Sections without macro fields under strict check should pass."""
         profile_data = {
+            'personalInfo': {'full_name': 'Jane Doe'},
             'experience': [
                 {'company': 'TechCorp', 'title': 'Engineer'}
             ],
@@ -543,19 +860,22 @@ class TestHallucinationDetection:
             'skills': [],
             'certifications': []
         }
-        
+
         latex_source = r"""
+        \documentclass{article}
+        \begin{document}
+        \resumeHeader{Jane Doe}
         \section*{Professional Experience}
-        \textbf{TechCorp}
-        
+        \resumeEntryHeading{Engineer}{2020 -- Present}{TechCorp}{}
         \section*{Education}
         \section*{Skills}
+        \end{document}
         """
-        
-        is_hallucinated, entity = HallucinationDetector.detect_hallucination(
+
+        is_hallucinated, message = HallucinationDetector.detect_hallucination(
             profile_data, latex_source
         )
-        
+
         assert not is_hallucinated
 
 
@@ -683,32 +1003,30 @@ class TestLatexValidation:
         with pytest.raises(ModelOutputInvalidException):
             ResumeGenerationService.validate_ai_output(request, '   ', [])
     
-    def test_hallucinated_content_rejected(self, user_with_profile, job_description, template):
-        """Test that valid LaTeX with hallucinated content is rejected."""
+    def test_hallucinated_content_not_blocked_by_validation(
+        self, user_with_profile, job_description, template
+    ):
+        """Hallucination check is disabled; invented entry headings pass structure validation."""
         from app.resumes.services import ResumeGenerationService
-        from app.common.exceptions import ModelOutputInvalidException
-        
+
         request = ResumeGenerationRequest.objects.create(
             user=user_with_profile,
             job_description=job_description,
             template_id=template.id,
-            profile_snapshot=user_with_profile.profile.data
+            profile_snapshot=user_with_profile.profile.data,
+            selected_sections=['experience'],
         )
-        
-        # Valid structure but contains hallucinated company
-        hallucinated_latex = r"""\documentclass{article}
+
+        latex_with_invented_org = r"""\documentclass{article}
 \begin{document}
-\textbf{Jane Doe}
-\textbf{TechCorp}  % Valid - in profile
-\textbf{FakeCompany Corp}  % Invalid - hallucinated
+\resumeHeader{Jane Doe}
+\resumeEntryHeading{Engineer}{2020 -- Present}{TechCorp}{}
+\resumeEntryHeading{Engineer}{2018 -- 2019}{FakeCompany Corp}{}
 \end{document}"""
-        
-        with pytest.raises(ModelOutputInvalidException) as exc_info:
-            ResumeGenerationService.validate_ai_output(
-                request, hallucinated_latex, []
-            )
-        
-        assert 'hallucinated' in str(exc_info.value).lower()
+
+        ResumeGenerationService.validate_ai_output(
+            request, latex_with_invented_org, []
+        )
 
 
 # =============================================================================
@@ -720,25 +1038,24 @@ class TestErrorCodes:
     """Tests for correct error code assignment."""
     
     def test_model_output_invalid_code(self, user_with_profile, job_description, template):
-        """Test that MODEL_OUTPUT_INVALID code is returned for hallucinations."""
+        """Test that MODEL_OUTPUT_INVALID code is returned for invalid LaTeX."""
         from app.resumes.services import ResumeGenerationService
         from app.common.exceptions import ModelOutputInvalidException, ErrorCode
-        
+
         request = ResumeGenerationRequest.objects.create(
             user=user_with_profile,
             job_description=job_description,
             template_id=template.id,
             profile_snapshot=user_with_profile.profile.data
         )
-        
-        hallucinated_latex = r"""\documentclass{article}
+
+        invalid_latex = r"""\documentclass{article}
 \begin{document}
-\textbf{InventedUniversity}
-\end{document}"""
-        
+\textbf{Jane Doe}"""
+
         try:
             ResumeGenerationService.validate_ai_output(
-                request, hallucinated_latex, []
+                request, invalid_latex, []
             )
             assert False, "Should have raised ModelOutputInvalidException"
         except ModelOutputInvalidException as e:

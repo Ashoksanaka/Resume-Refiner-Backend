@@ -1,0 +1,111 @@
+% Resume AI — ATS-safe professional reference template for AI customization
+% Each body block is tagged with % SECTION: <profile_key>
+% Preserve preamble and macros; include only SELECTED_SECTIONS (flexible order).
+
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=0.6in]{geometry}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+
+\input{resume_macros.tex}
+
+\begin{document}
+
+% SECTION: personalInfo
+\resumeHeader{Full Name}
+\resumeContactLine{phone@example.com $|$ email@example.com $|$ linkedin.com/in/profile $|$ github.com/username}
+
+% SECTION: summary
+\resumeSectionTitle{PROFESSIONAL SUMMARY}
+\resumeSummaryText{Two to four sentences synthesizing top qualifications for the target role — full body text, not a one-line profile paste.}
+
+% SECTION: education
+\resumeSectionTitle{EDUCATION}
+\resumeEducationEntry{Degree Name}{Start -- End}{Institution Name, Location}{CGPA or honors detail}
+
+% SECTION: experience
+\resumeSectionTitle{PROFESSIONAL EXPERIENCE}
+\resumeExperienceHeading{Job Title}{Start -- End}{Company Name}{Location}
+\begin{itemize}[leftmargin=*]
+  \resumeItem{Achievement or responsibility bullet point}
+\end{itemize}
+
+% SECTION: projects
+\resumeSectionTitle{TECHNICAL PROJECTS}
+\resumeProjectEntry{Project Name}{Start -- End}{Technologies: skill one, skill two}
+
+% SECTION: skills
+\resumeSectionTitle{TECHNICAL SKILLS}
+\resumeSkillLine{Category Name}{Skill one, Skill two, Skill three}
+
+% SECTION: certifications
+\resumeSectionTitle{CERTIFICATIONS}
+\resumeDetailLine{Certification Name — Issuing Organization (Year)}
+
+% SECTION: achievements
+\resumeSectionTitle{ACHIEVEMENTS}
+\resumeDetailLine{Achievement title — description}
+
+% SECTION: publications
+\resumeSectionTitle{PUBLICATIONS}
+\resumeDetailLine{Publication title — venue (Year)}
+
+% SECTION: patents
+\resumeSectionTitle{PATENTS}
+\resumeDetailLine{Patent title — patent number (Year)}
+
+% SECTION: licenses
+\resumeSectionTitle{LICENSES}
+\resumeDetailLine{License name — issuing body (Year)}
+
+% SECTION: trainings
+\resumeSectionTitle{TRAINING \& COURSES}
+\resumeEducationEntry{Training Title}{Year}{Provider}{Optional detail}
+
+% SECTION: volunteering
+\resumeSectionTitle{VOLUNTEER EXPERIENCE}
+\resumeExperienceHeading{Role}{Start -- End}{Organization}{Location}
+\begin{itemize}[leftmargin=*]
+  \resumeItem{Volunteering description}
+\end{itemize}
+\vspace{2pt}
+
+% SECTION: organizations
+\resumeSectionTitle{PROFESSIONAL ORGANIZATIONS}
+\resumeExperienceHeading{Role}{Start -- End}{Organization Name}{}
+\begin{itemize}[leftmargin=*]
+  \resumeItem{Organization involvement detail}
+\end{itemize}
+\vspace{2pt}
+
+% SECTION: positions
+\resumeSectionTitle{POSITIONS OF RESPONSIBILITY}
+\resumeExperienceHeading{Position Title}{Start -- End}{Organization}{}
+\begin{itemize}[leftmargin=*]
+  \resumeItem{Position description}
+\end{itemize}
+\vspace{2pt}
+
+% SECTION: career_breaks
+\resumeSectionTitle{CAREER BREAK}
+\resumeDetailLine{Start -- End: Reason — description}
+
+% SECTION: languages
+\resumeSectionTitle{LANGUAGES}
+\resumeDetailLine{Language — proficiency level}
+
+% SECTION: test_scores
+\resumeSectionTitle{TEST SCORES}
+\resumeDetailLine{Test name — score (Year)}
+
+% SECTION: areas_of_interest
+\resumeSectionTitle{AREAS OF INTEREST}
+\resumeSkillLine{Interests}{Interest one, Interest two}
+
+% SECTION: hobbies
+\resumeSectionTitle{HOBBIES}
+\resumeSkillLine{Hobbies}{Hobby one, Hobby two}
+
+\end{document}

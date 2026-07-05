@@ -33,6 +33,14 @@ from pydantic import BaseModel, Field, field_validator
 # Import validator
 # Use absolute import since we're running as a script, not a package
 from validator import latex_validator, ValidationErrorType
+from ats_preamble import (
+    ensure_ats_resume_preamble,
+    analyze_ats_preamble,
+    log_compile_validation,
+    normalize_document_envelope,
+    expand_resume_items,
+    _find_marker_positions,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -232,6 +240,19 @@ class TemplateManager:
         
         with open(template_path, 'r', encoding='utf-8') as f:
             return f.read()
+
+    def get_resume_template_content(self, template_id: str) -> Optional[str]:
+        """Get the ATS reference template used for AI customization."""
+        template_dir = self.get_template_dir(template_id)
+        if not template_dir:
+            return None
+
+        resume_template_path = template_dir / "resume_template.tex"
+        if not resume_template_path.exists():
+            return None
+
+        with open(resume_template_path, 'r', encoding='utf-8') as f:
+            return f.read()
     
     def get_main_template_content(self) -> Optional[str]:
         """Get the main.tex template content."""
@@ -356,6 +377,43 @@ class PlaceholderSubstitutor:
         return value
     
     @classmethod
+    def build_degree_display(cls, edu: dict) -> str:
+        """Build a human-readable degree line for resume output."""
+        legacy_degree = edu.get('degree', '').strip()
+        course = edu.get('course_other', '').strip() if edu.get('course') == 'Other' else edu.get('course', '')
+        specialization = edu.get('specialization', '').strip()
+        degree_level = (
+            edu.get('degree_level_other', '').strip()
+            if edu.get('degree_level') == 'Other'
+            else edu.get('degree_level', '')
+        )
+
+        if not course and not specialization and not degree_level and legacy_degree:
+            return legacy_degree
+
+        grade_type = edu.get('grade_type')
+        grade_value = edu.get('grade_value')
+        grade_suffix = ''
+        if grade_value is not None:
+            if grade_type == 'cgpa':
+                grade_suffix = f' (CGPA: {grade_value:g})'
+            elif grade_type == 'percentage':
+                grade_suffix = f' ({grade_value:g}%)'
+
+        if degree_level and degree_level not in ("Bachelor's", 'High School'):
+            parts = [part for part in (course, specialization) if part]
+            main = ', '.join(parts) if parts else degree_level
+            return f'{degree_level} — {main}{grade_suffix}'
+
+        if course and specialization:
+            return f'{course} in {specialization}{grade_suffix}'
+        if course:
+            return f'{course}{grade_suffix}'
+        if specialization:
+            return f'{specialization}{grade_suffix}'
+        return legacy_degree or degree_level or ''
+
+    @classmethod
     def format_date(cls, date_str: Optional[str]) -> str:
         """Format a date string for display."""
         if not date_str:
@@ -453,6 +511,7 @@ class PlaceholderSubstitutor:
             edu_copy = dict(edu)
             edu_copy['end_date_display'] = cls.format_date(edu.get('end_date'))
             edu_copy['start_date'] = cls.format_date(edu.get('start_date'))
+            edu_copy['degree_display'] = cls.build_degree_display(edu)
             edu_copy['description_items'] = cls.format_description_items(edu.get('description', ''))
             education.append(edu_copy)
         processed['education'] = education
@@ -608,6 +667,9 @@ def fix_latex_before_compile(latex_source: str) -> str:
     Auto-fixes are applied only when safe and deterministic.
     """
     original_source = latex_source
+
+    latex_source = normalize_document_envelope(latex_source)
+    latex_source = expand_resume_items(latex_source)
     
     # Ensure \begin{document} exists - if missing, add it
     if '\\begin{document}' not in latex_source:
@@ -944,8 +1006,7 @@ def fix_latex_before_compile(latex_source: str) -> str:
         content_clean = re.sub(r'%.*', '', content)  # Remove comments
         content_clean = content_clean.strip()  # Remove leading/trailing whitespace
         
-        # Check if there's at least one \item (not inside a comment)
-        # Look for \item that's not part of a comment
+        # Check if there's at least one list item macro or \item
         has_item = False
         lines = content.split('\n')
         for line in lines:
@@ -953,7 +1014,7 @@ def fix_latex_before_compile(latex_source: str) -> str:
             comment_pos = line.find('%')
             if comment_pos != -1:
                 line = line[:comment_pos]
-            if '\\item' in line:
+            if re.search(r'\\(?:item|resumeItem|resumeEntryHeading|resumeTagList)\b', line):
                 has_item = True
                 break
         
@@ -1001,10 +1062,10 @@ def fix_latex_before_compile(latex_source: str) -> str:
                     if part.strip():
                         # Apply fix only within this section's content
                         part = re.sub(
-                            r'\\begin\{((itemize|enumerate|description))\}(.*?)\\end\{((itemize|enumerate|description))\}',
+                            r'\\begin\{((itemize|enumerate|description))\}([\s\S]*?)\\end\{((itemize|enumerate|description))\}',
                             fix_empty_lists,
                             part,
-                            flags=re.MULTILINE  # Use MULTILINE instead of DOTALL
+                            flags=re.MULTILINE,
                         )
                     processed_parts.append(part)
                 else:
@@ -1014,10 +1075,10 @@ def fix_latex_before_compile(latex_source: str) -> str:
         else:
             # No sections found, apply fix normally but be cautious
             latex_source = re.sub(
-                r'\\begin\{((itemize|enumerate|description))\}(.*?)\\end\{((itemize|enumerate|description))\}',
+                r'\\begin\{((itemize|enumerate|description))\}([\s\S]*?)\\end\{((itemize|enumerate|description))\}',
                 fix_empty_lists,
                 latex_source,
-                flags=re.MULTILINE  # Use MULTILINE instead of DOTALL
+                flags=re.MULTILINE,
             )
         
         # Verify we didn't lose too much content
@@ -1104,104 +1165,90 @@ def fix_latex_before_compile(latex_source: str) -> str:
         else:
             latex_source = '\\documentclass{article}\n\\begin{document}\n' + latex_source
     
-    # Fix "Lonely \item" errors - SAFE AUTO-FIX
-    # Try to wrap lonely \item commands in itemize environment if safe
-    # Only wrap if there's a clear pattern (multiple items together)
-    parts = latex_source.split('\\begin{document}', 1)  # Split only on first occurrence
-    if len(parts) == 2:
-        preamble, body = parts
-        lines = body.split('\n')
-        fixed_lines = []
-        i = 0
-        
-        while i < len(lines):
-            line = lines[i]
-            
-            # Check if this line has \item
-            if '\\item' in line:
-                # Look back up to 10 lines for \begin{itemize} or \begin{enumerate}
-                found_list_start = False
-                lookback_start = max(0, i - 10)
-                for j in range(lookback_start, i):
-                    if '\\begin{itemize}' in lines[j] or '\\begin{enumerate}' in lines[j] or '\\begin{description}' in lines[j]:
-                        found_list_start = True
-                        break
-                
-                # Also check if we're already inside a list (look for \end)
-                if not found_list_start:
-                    # Check if there's an \end before us
+    # Fix "Lonely \item" errors - skip ATS resumes (they use \resumeItem inside itemize)
+    if '\\resumeSectionTitle' not in latex_source and '\\resumeHeader' not in latex_source:
+        parts = latex_source.split('\\begin{document}', 1)
+        if len(parts) == 2:
+            preamble, body = parts
+            lines = body.split('\n')
+            fixed_lines = []
+            i = 0
+
+            while i < len(lines):
+                line = lines[i]
+
+                if '\\item' in line:
+                    found_list_start = False
+                    lookback_start = max(0, i - 10)
                     for j in range(lookback_start, i):
-                        if '\\end{itemize}' in lines[j] or '\\end{enumerate}' in lines[j] or '\\end{description}' in lines[j]:
-                            # Check if there's a begin after this end
-                            has_begin_after = False
-                            for k in range(j + 1, i):
-                                if '\\begin{itemize}' in lines[k] or '\\begin{enumerate}' in lines[k] or '\\begin{description}' in lines[k]:
-                                    found_list_start = True
-                                    has_begin_after = True
+                        if '\\begin{itemize}' in lines[j] or '\\begin{enumerate}' in lines[j] or '\\begin{description}' in lines[j]:
+                            found_list_start = True
+                            break
+
+                    if not found_list_start:
+                        for j in range(lookback_start, i):
+                            if '\\end{itemize}' in lines[j] or '\\end{enumerate}' in lines[j] or '\\end{description}' in lines[j]:
+                                has_begin_after = False
+                                for k in range(j + 1, i):
+                                    if '\\begin{itemize}' in lines[k] or '\\begin{enumerate}' in lines[k] or '\\begin{description}' in lines[k]:
+                                        found_list_start = True
+                                        has_begin_after = True
+                                        break
+                                if not has_begin_after:
                                     break
-                            if not has_begin_after:
-                                break
-                
-                if not found_list_start:
-                    # Check if there are multiple \item commands nearby (safe to wrap)
-                    item_count = 0
-                    lookahead_end = min(len(lines), i + 5)
-                    for j in range(i, lookahead_end):
-                        if '\\item' in lines[j]:
-                            item_count += 1
-                    
-                    # Only wrap if there are at least 2 items together (safer pattern)
-                    if item_count >= 2:
-                        # Wrap in itemize - insert \begin{itemize} before first item
-                        # Check if we already inserted it
-                        if i == 0 or '\\begin{itemize}' not in lines[i-1]:
-                            fixed_lines.append('\\begin{itemize}')
-                        fixed_lines.append(line)
-                        # We'll close it later when we find non-item content
+
+                    if not found_list_start:
+                        item_count = sum(
+                            1 for j in range(i, min(len(lines), i + 5)) if '\\item' in lines[j]
+                        )
+                        if item_count >= 2:
+                            if i == 0 or '\\begin{itemize}' not in lines[i - 1]:
+                                fixed_lines.append('\\begin{itemize}')
+                            fixed_lines.append(line)
+                        else:
+                            i += 1
+                            continue
                     else:
-                        # Single lonely item - remove it (safer than wrapping)
-                        i += 1
-                        continue
+                        fixed_lines.append(line)
                 else:
-                    fixed_lines.append(line)
-            else:
-                # Not an item line
-                # If we have open itemize and this is not an item, close it
-                if fixed_lines and fixed_lines[-1].strip() and '\\item' not in line and '\\begin' not in line and '\\end' not in line:
-                    # Check if last line was an item
-                    if fixed_lines and '\\item' in fixed_lines[-1]:
-                        # Check if we need to close itemize
-                        # Look back to see if we opened one
+                    if (
+                        fixed_lines
+                        and fixed_lines[-1].strip()
+                        and '\\item' not in line
+                        and '\\begin' not in line
+                        and '\\end' not in line
+                        and not line.strip().startswith('\\vspace')
+                        and '\\resumeSectionTitle' not in line
+                        and not line.strip().startswith('%')
+                        and fixed_lines
+                        and '\\item' in fixed_lines[-1]
+                    ):
                         for j in range(len(fixed_lines) - 1, max(0, len(fixed_lines) - 10), -1):
                             if '\\begin{itemize}' in fixed_lines[j]:
-                                # Check if we haven't closed it
-                                has_closed = False
-                                for k in range(j + 1, len(fixed_lines)):
-                                    if '\\end{itemize}' in fixed_lines[k]:
-                                        has_closed = True
-                                        break
+                                has_closed = any(
+                                    '\\end{itemize}' in fixed_lines[k]
+                                    for k in range(j + 1, len(fixed_lines))
+                                )
                                 if not has_closed:
                                     fixed_lines.append('\\end{itemize}')
                                 break
-                
-                fixed_lines.append(line)
-            i += 1
-        
-        # Close any open itemize at the end
-        if fixed_lines:
-            itemize_count = sum(1 for line in fixed_lines if '\\begin{itemize}' in line)
-            itemize_end_count = sum(1 for line in fixed_lines if '\\end{itemize}' in line)
-            if itemize_count > itemize_end_count:
-                fixed_lines.append('\\end{itemize}')
-        
-        body = '\n'.join(fixed_lines)
-        latex_source = preamble + '\\begin{document}' + body
-    
+
+                    fixed_lines.append(line)
+                i += 1
+
+            if fixed_lines:
+                itemize_count = sum(1 for line in fixed_lines if '\\begin{itemize}' in line)
+                itemize_end_count = sum(1 for line in fixed_lines if '\\end{itemize}' in line)
+                if itemize_count > itemize_end_count:
+                    fixed_lines.append('\\end{itemize}')
+
+            body = '\n'.join(fixed_lines)
+            latex_source = preamble + '\\begin{document}' + body
+
     # Fix undefined control sequences - SAFE AUTO-FIX
     # Only fix known problematic patterns that are safe to replace
     problematic_patterns = [
         (r'\\resumesection', ''),  # Remove if undefined (safe - just removes command)
-        (r'\\section\*\{([^}]+)\}', r'\\section{\1}'),  # Convert \section* to \section (safe)
     ]
     
     for pattern, replacement in problematic_patterns:
@@ -1291,33 +1338,7 @@ def fix_latex_before_compile(latex_source: str) -> str:
         else:
             latex_source = '\\documentclass{article}\n\\begin{document}\n' + latex_source
     
-    # Ensure \end{document} exists (but only one)
-    # Count occurrences
-    begin_doc_count = latex_source.count('\\begin{document}')
-    end_doc_count = latex_source.count('\\end{document}')
-    
-    # If there are multiple \begin{document} or \end{document}, keep only the first/last
-    if begin_doc_count > 1:
-        # Keep only the first \begin{document}
-        first_begin = latex_source.find('\\begin{document}')
-        if first_begin != -1:
-            # Remove all other occurrences
-            latex_source = latex_source[:first_begin+len('\\begin{document}')] + \
-                          latex_source[first_begin+len('\\begin{document}'):].replace('\\begin{document}', '')
-    
-    if end_doc_count > 1:
-        # Keep only the last \end{document}
-        last_end = latex_source.rfind('\\end{document}')
-        if last_end != -1:
-            # Remove all other occurrences BEFORE the last one
-            before_last = latex_source[:last_end]
-            after_last = latex_source[last_end:]
-            # Remove all \end{document} from before_last
-            before_last = before_last.replace('\\end{document}', '')
-            latex_source = before_last + after_last
-            logger.warning("[fix_latex_before_compile] Removed %d duplicate \\end{document} tags (kept only the last one)", end_doc_count - 1)
-    
-    # Ensure \end{document} exists (only if missing)
+    # Document envelope already normalized above; keep legacy fallback for edge cases.
     if '\\end{document}' not in latex_source:
         latex_source = latex_source + '\n\\end{document}'
     
@@ -1334,8 +1355,13 @@ def fix_latex_before_compile(latex_source: str) -> str:
         
         # Remove comments and whitespace
         content_clean = re.sub(r'%.*', '', content).strip()
-        # Check for \item
-        if '\\item' not in content_clean:
+        has_list_content = bool(
+            re.search(
+                r'\\(?:item|resumeEntryHeading|resumeItem|resumeTagList)\b',
+                content_clean,
+            )
+        )
+        if not has_list_content:
             # Only remove if content is very short (likely empty)
             if len(content_clean) < 50:
                 return ''
@@ -1365,10 +1391,10 @@ def fix_latex_before_compile(latex_source: str) -> str:
                     if part.strip():
                         # Apply fix only within this section's content
                         part = re.sub(
-                            r'\\begin\{((itemize|enumerate|description))\}(.*?)\\end\{((itemize|enumerate|description))\}',
+                            r'\\begin\{((itemize|enumerate|description))\}([\s\S]*?)\\end\{((itemize|enumerate|description))\}',
                             remove_empty_lists_final,
                             part,
-                            flags=re.MULTILINE  # Use MULTILINE instead of DOTALL
+                            flags=re.MULTILINE,
                         )
                     processed_parts.append(part)
                 else:
@@ -1378,10 +1404,10 @@ def fix_latex_before_compile(latex_source: str) -> str:
         else:
             # No sections found, apply fix normally
             latex_source = re.sub(
-                r'\\begin\{((itemize|enumerate|description))\}(.*?)\\end\{((itemize|enumerate|description))\}',
+                r'\\begin\{((itemize|enumerate|description))\}([\s\S]*?)\\end\{((itemize|enumerate|description))\}',
                 remove_empty_lists_final,
                 latex_source,
-                flags=re.MULTILINE  # Use MULTILINE instead of DOTALL
+                flags=re.MULTILINE,
             )
         
         # Verify we didn't lose too much content
@@ -1408,8 +1434,8 @@ def fix_latex_before_compile(latex_source: str) -> str:
     # BUT: Only close if there's exactly ONE \end{document} (duplicate removal should have run first)
     def close_unclosed_environments(source):
         """Close any unclosed \begin{...} environments before \end{document}."""
-        # CRITICAL: Only process if there's exactly one \end{document}
-        end_doc_count = source.count('\\end{document}')
+        # CRITICAL: Only process if there's exactly one \end{document} outside comments
+        end_doc_count = len(_find_marker_positions(source, "\\end{document}"))
         if end_doc_count == 0:
             return source
         
@@ -1450,9 +1476,12 @@ def fix_latex_before_compile(latex_source: str) -> str:
         for pos in all_positions:
             if pos in begin_map:
                 env_name = begin_map[pos]
-                env_stack.append(env_name)
+                if env_name != "document":
+                    env_stack.append(env_name)
             elif pos in end_map:
                 env_name = end_map[pos]
+                if env_name == "document":
+                    continue
                 if env_stack and env_stack[-1] == env_name:
                     env_stack.pop()
                 elif env_stack:
@@ -1482,6 +1511,7 @@ def fix_latex_before_compile(latex_source: str) -> str:
         return source
     
     # CRITICAL: Run close_unclosed_environments AFTER duplicate removal
+    latex_source = normalize_document_envelope(latex_source)
     latex_source = close_unclosed_environments(latex_source)
     
     # FINAL SAFETY CHECK: Fix math mode one more time at the end
@@ -1878,6 +1908,29 @@ async def get_main_template_content():
     )
 
 
+@app.get("/templates/{template_id}/resume-template")
+async def get_resume_template_content(template_id: str):
+    """
+    Get the ATS reference LaTeX template for AI customization.
+
+    Returns resume_template.tex — the fixed template with all profile section blocks.
+    """
+    template = template_manager.get_template(template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    template_content = template_manager.get_resume_template_content(template_id)
+    if not template_content:
+        raise HTTPException(status_code=404, detail="Resume template not found for this template ID")
+
+    from fastapi.responses import Response
+    return Response(
+        content=template_content,
+        media_type="text/plain",
+        headers={"Content-Disposition": f'inline; filename="{template_id}_resume_template.tex"'},
+    )
+
+
 @app.get("/templates/{template_id}/content")
 async def get_template_content(template_id: str):
     """
@@ -2097,9 +2150,19 @@ async def compile_latex(request: CompileRequest):
             }
         )
     
+    # Normalize ATS template macros/separators before structural validation
+    latex_source = ensure_ats_resume_preamble(request.latex_source)
+    latex_source = normalize_document_envelope(latex_source)
+    preamble_state = analyze_ats_preamble(latex_source)
+
     # Validate LaTeX source structure
     logger.info("[LaTeX Service] Validating LaTeX source structure (brackets, environments, commands, etc.)")
-    validation_result = latex_validator.validate(request.latex_source)
+    validation_result = latex_validator.validate(latex_source)
+    log_compile_validation(
+        compilation_id,
+        preamble_state,
+        [error.message for error in validation_result.errors],
+    )
     
     # Log validation metrics
     if not validation_result.is_valid:
@@ -2148,7 +2211,7 @@ async def compile_latex(request: CompileRequest):
     logger.info("[LaTeX Service] Starting LaTeX compilation process (compile_runs: %d)", compile_runs)
     logger.info("[LaTeX Service] Output directory: %s, Filename: %s", OUTPUT_DIR, compilation_id)
     success, log, pdf_path = LaTeXCompiler.compile(
-        latex_source=request.latex_source,
+        latex_source=latex_source,
         output_dir=OUTPUT_DIR,
         filename=compilation_id,
         template_dir=template_dir,
@@ -2218,6 +2281,8 @@ async def compile_with_profile(template_id: str, profile: dict):
     
     # Substitute placeholders
     latex_source = PlaceholderSubstitutor.substitute(template_content, profile)
+    latex_source = ensure_ats_resume_preamble(latex_source)
+    latex_source = normalize_document_envelope(latex_source)
     
     # Validate LaTeX source structure
     validation_result = latex_validator.validate(latex_source)

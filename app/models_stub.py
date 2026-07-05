@@ -32,9 +32,17 @@ class ExperienceItem(TypedDict, total=False):
 class EducationItem(TypedDict, total=False):
     """Education item."""
     institution: str
-    degree: str
+    degree: str  # Legacy optional field
+    degree_level: str
+    degree_level_other: Optional[str]
+    course: str
+    course_other: Optional[str]
+    specialization: str
+    location: str
+    grade_type: str  # 'percentage' | 'cgpa'
+    grade_value: float
     start_date: str  # ISO 8601 date format
-    end_date: Optional[str]  # ISO 8601 date format
+    end_date: Optional[str]  # ISO 8601 date format; null = currently studying
     description: Optional[str]
 
 
@@ -50,12 +58,14 @@ class ProjectItem(TypedDict, total=False):
     id: str  # UUID
     title: str
     role: str
-    description: Optional[str]
+    description: str
     start_date: Optional[str]  # ISO 8601 date format
     end_date: Optional[str]  # ISO 8601 date format
     ongoing: bool
     technologies: List[str]
-    link: Optional[str]  # URL
+    link: Optional[str]  # Legacy URL
+    github_url: Optional[str]  # URL
+    deployment_url: Optional[str]  # URL
     achievements: List[str]
 
 
@@ -63,8 +73,10 @@ class AchievementItem(TypedDict, total=False):
     """Achievement item."""
     id: str  # UUID
     title: str
-    description: Optional[str]
+    description: str
     issuer: Optional[str]
+    location: Optional[str]
+    is_virtual: Optional[bool]
     date: Optional[str]  # ISO 8601 date format
 
 
@@ -112,9 +124,10 @@ class VolunteeringItem(TypedDict, total=False):
     id: str  # UUID
     organization: str
     role: str
+    location: Optional[str]
     start_date: Optional[str]  # ISO 8601 date format
     end_date: Optional[str]  # ISO 8601 date format
-    description: Optional[str]
+    description: str
 
 
 class PositionItem(TypedDict, total=False):
@@ -122,9 +135,10 @@ class PositionItem(TypedDict, total=False):
     id: str  # UUID
     title: str
     organization: str
+    location: Optional[str]
     start_date: str  # ISO 8601 date format
     end_date: Optional[str]  # ISO 8601 date format
-    description: Optional[str]
+    description: str
 
 
 class CareerBreakItem(TypedDict, total=False):
@@ -133,7 +147,7 @@ class CareerBreakItem(TypedDict, total=False):
     start_date: str  # ISO 8601 date format
     end_date: Optional[str]  # ISO 8601 date format
     reason: Literal['parental', 'health', 'travel', 'education', 'other']
-    description: Optional[str]
+    description: str
 
 
 class LicenseItem(TypedDict, total=False):
@@ -142,7 +156,9 @@ class LicenseItem(TypedDict, total=False):
     name: str
     issuer: str
     license_number: Optional[str]
-    date: Optional[str]  # ISO 8601 date format
+    awarded_date: Optional[str]  # ISO 8601 date format
+    expiration_date: Optional[str]  # ISO 8601 date format
+    date: Optional[str]  # Legacy ISO 8601 date format
     url: Optional[str]  # URL
 
 
@@ -151,19 +167,67 @@ class TrainingItem(TypedDict, total=False):
     id: str  # UUID
     title: str
     provider: str
-    date: Optional[str]  # ISO 8601 date format
+    start_date: Optional[str]  # ISO 8601 date format
+    end_date: Optional[str]  # ISO 8601 date format
+    venue: Optional[str]
+    is_virtual: Optional[bool]
+    date: Optional[str]  # Legacy ISO 8601 date format
     certificate_url: Optional[str]  # URL
-    description: Optional[str]
+    description: str
+
+
+class PublicationAuthor(TypedDict, total=False):
+    """Publication author entry."""
+    name: str
+    affiliation: Optional[str]
+    order: Optional[int]
+    is_corresponding: Optional[bool]
+    orcid: Optional[str]
 
 
 class PublicationItem(TypedDict, total=False):
     """Publication item."""
     id: str  # UUID
     title: str
-    authors: List[str]
-    venue: str
+    subtitle: Optional[str]
+    authors: List[PublicationAuthor]
+    doi: Optional[str]
+    pmid: Optional[str]
+    pmcid: Optional[str]
+    isbn: Optional[str]
+    issn: Optional[str]
+    arxiv_id: Optional[str]
+    editor: Optional[str]
+    venue: Optional[str]
+    volume: Optional[str]
+    issue: Optional[str]
+    page_range: Optional[str]
+    article_number: Optional[str]
     date: Optional[str]  # ISO 8601 date format
+    online_date: Optional[str]  # ISO 8601 date format
+    accepted_date: Optional[str]  # ISO 8601 date format
+    publication_year: Optional[int]
+    publication_month: Optional[int]
+    keywords: List[str]
+    subject_categories: List[str]
     url: Optional[str]  # URL
+    landing_page_url: Optional[str]  # URL
+    pdf_url: Optional[str]  # URL
+    repository_url: Optional[str]  # URL
+    version_label: Optional[str]
+    version_date: Optional[str]  # ISO 8601 date format
+    funding_sources: List[str]
+    grant_numbers: List[str]
+    trial_registry: Optional[str]
+    ethics_approvals: Optional[str]
+    copyright_holder: Optional[str]
+    license: Optional[str]
+    reuse_permissions: Optional[str]
+    citation_count: Optional[int]
+    altmetric_score: Optional[float]
+    language: Optional[str]
+    publication_type: Optional[str]
+    document_type: Optional[str]
     abstract: Optional[str]
 
 
@@ -173,9 +237,32 @@ class PatentItem(TypedDict, total=False):
     title: str
     patent_number: str
     status: Literal['filed', 'granted', 'pending']
+    abstract: Optional[str]
+    keywords: List[str]
+    application_number: Optional[str]
+    publication_number: Optional[str]
+    inventors: List[str]
+    applicants: List[str]
+    assignees: List[str]
     filing_date: Optional[str]  # ISO 8601 date format
+    priority_date: Optional[str]  # ISO 8601 date format
+    publication_date: Optional[str]  # ISO 8601 date format
     grant_date: Optional[str]  # ISO 8601 date format
+    patent_office: Optional[str]
+    family_id: Optional[str]
+    ipc_codes: List[str]
+    cpc_codes: List[str]
+    us_classifications: List[str]
+    kind_code: Optional[str]
+    legal_status: Optional[str]
+    pct_number: Optional[str]
+    representative: Optional[str]
     url: Optional[str]  # URL
+    drawings_url: Optional[str]  # URL
+    pdf_url: Optional[str]  # URL
+    forward_citations: Optional[int]
+    family_size: Optional[int]
+    publication_languages: List[str]
 
 
 class HonorAwardItem(TypedDict, total=False):
@@ -197,10 +284,19 @@ class TestScoreItem(TypedDict, total=False):
     date: Optional[str]  # ISO 8601 date format
 
 
+LanguageProficiency = Literal['basic', 'conversational', 'professional', 'native']
+LegacyLanguageProficiency = Literal[
+    'native', 'full_professional', 'limited_professional', 'conversational', 'basic'
+]
+
+
 class LanguageItem(TypedDict, total=False):
     """Language item."""
     language: str
-    proficiency: Literal['native', 'full_professional', 'limited_professional', 'conversational', 'basic']
+    read_proficiency: LanguageProficiency
+    write_proficiency: LanguageProficiency
+    speak_proficiency: LanguageProficiency
+    proficiency: LegacyLanguageProficiency  # Legacy single proficiency field
     certification: Optional[str]
 
 
@@ -209,9 +305,10 @@ class OrganizationItem(TypedDict, total=False):
     id: str  # UUID
     name: str
     role: str
+    location: Optional[str]
     start_date: Optional[str]  # ISO 8601 date format
     end_date: Optional[str]  # ISO 8601 date format
-    description: Optional[str]
+    description: str
 
 
 class ContactInfo(TypedDict, total=False):

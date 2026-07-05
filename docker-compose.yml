@@ -49,9 +49,17 @@ services:
     volumes:
       - .:/app
       - generated_pdfs:/app/generated/pdfs
+      - ../.cursor:/cursor-debug
     ports:
       - "8000:8000"
     env_file: .env
+    environment:
+      # FormaTeX PDF compilation (optional; unset FORMATEX_API_KEY to use local LaTeX service)
+      FORMATEX_API_KEY: ${FORMATEX_API_KEY:-}
+      FORMATEX_API_BASE_URL: ${FORMATEX_API_BASE_URL:-https://api.formatex.io/api/v1}
+      FORMATEX_ENGINE: ${FORMATEX_ENGINE:-auto}
+      FORMATEX_TIMEOUT: ${FORMATEX_TIMEOUT:-120}
+      FORMATEX_USE_SMART_COMPILE: ${FORMATEX_USE_SMART_COMPILE:-True}
     depends_on:
       db:
         condition: service_healthy
@@ -76,7 +84,14 @@ services:
     volumes:
       - .:/app
       - generated_pdfs:/app/generated/pdfs
+      - ../.cursor:/cursor-debug
     env_file: .env
+    environment:
+      FORMATEX_API_KEY: ${FORMATEX_API_KEY:-}
+      FORMATEX_API_BASE_URL: ${FORMATEX_API_BASE_URL:-https://api.formatex.io/api/v1}
+      FORMATEX_ENGINE: ${FORMATEX_ENGINE:-auto}
+      FORMATEX_TIMEOUT: ${FORMATEX_TIMEOUT:-120}
+      FORMATEX_USE_SMART_COMPILE: ${FORMATEX_USE_SMART_COMPILE:-True}
     depends_on:
       - backend
       - redis
@@ -107,9 +122,13 @@ services:
     container_name: resumeai-agent
     env_file: .env
     environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
+      - NVIDIA_MODEL=${NVIDIA_MODEL:-nvidia/nemotron-3-super-120b-a12b}
+      - NVIDIA_API_BASE_URL=${NVIDIA_API_BASE_URL:-https://integrate.api.nvidia.com/v1}
+      - NVIDIA_REQUEST_TIMEOUT=${NVIDIA_REQUEST_TIMEOUT:-180}
     volumes:
       - ./services/agent:/app
+      - ../.cursor:/cursor-debug
     healthcheck:
       test: ["CMD-SHELL", "grep -q 'uvicorn' /proc/1/cmdline || exit 1"]
       interval: 10s
@@ -124,8 +143,13 @@ services:
       context: ./services/latex
       dockerfile: Dockerfile
     container_name: resumeai-latex
+    environment:
+      - LATEX_COMPILE_TIMEOUT=${LATEX_COMPILE_TIMEOUT:-60}
     volumes:
       - generated_pdfs:/app/output
+      - ./services/latex/templates:/app/templates
+      - ./services/latex/ats_preamble.py:/app/ats_preamble.py
+      - ./services/latex/validator.py:/app/validator.py
     healthcheck:
       test: ["CMD-SHELL", "grep -q 'uvicorn' /proc/1/cmdline || exit 1"]
       interval: 10s

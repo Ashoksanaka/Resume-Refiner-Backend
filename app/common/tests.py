@@ -9,7 +9,7 @@ Tests:
 import pytest
 from datetime import timedelta
 from django.utils import timezone
-from app.authentication.models import User, EmailVerificationToken, IdempotencyKey
+from app.authentication.models import User, IdempotencyKey
 from app.profiles.models import Profile
 from app.resumes.models import JobDescription, ResumeGenerationRequest
 from app.common.models import Template
@@ -58,6 +58,7 @@ class TestTTLCleanup:
         # Create an expired JD
         expired_jd = JobDescription.objects.create(
             user=verified_user,
+            role_name='Expired Role',
             text='Expired job description',
             expires_at=timezone.now() - timedelta(hours=1)
         )
@@ -65,6 +66,7 @@ class TestTTLCleanup:
         # Create a valid JD
         valid_jd = JobDescription.objects.create(
             user=verified_user,
+            role_name='Valid Role',
             text='Valid job description',
             expires_at=timezone.now() + timedelta(hours=23)
         )
@@ -83,6 +85,7 @@ class TestTTLCleanup:
         # Create a JD first
         jd = JobDescription.objects.create(
             user=verified_user,
+            role_name='Test Role',
             text='Test JD',
             expires_at=timezone.now() + timedelta(hours=24)
         )
@@ -114,30 +117,10 @@ class TestTTLCleanup:
         assert ResumeGenerationRequest.objects.filter(id=valid_request.id).exists()
         assert result['resume_requests_deleted'] == 1
     
-    def test_cleanup_expired_verification_tokens(self, verified_user):
-        """Test that expired verification tokens are deleted."""
-        # Create an expired token
-        expired_token = EmailVerificationToken.objects.create(
-            user=verified_user,
-            token='expired-token-123',
-            expires_at=timezone.now() - timedelta(hours=1)
-        )
-        
-        # Create a valid token
-        valid_token = EmailVerificationToken.objects.create(
-            user=verified_user,
-            token='valid-token-456',
-            expires_at=timezone.now() + timedelta(hours=23)
-        )
-        
-        # Run cleanup
+    def test_cleanup_expired_tokens_noop(self, verified_user):
+        """Legacy token cleanup task is a no-op after Clerk migration."""
         result = cleanup_expired_tokens()
-        
-        # Verify expired token is deleted
-        assert not EmailVerificationToken.objects.filter(id=expired_token.id).exists()
-        # Verify valid token still exists
-        assert EmailVerificationToken.objects.filter(id=valid_token.id).exists()
-        assert result['expired_tokens_deleted'] == 1
+        assert result['skipped'] is True
     
     def test_cleanup_expired_idempotency_keys(self, verified_user):
         """Test that expired idempotency keys are deleted."""
@@ -180,6 +163,7 @@ class TestTTLExpiration:
         # Create an expired JD
         expired_jd = JobDescription.objects.create(
             user=verified_user,
+            role_name='Expired Role',
             text='Expired',
             expires_at=timezone.now() - timedelta(hours=1)
         )
@@ -187,6 +171,7 @@ class TestTTLExpiration:
         # Create a valid JD
         valid_jd = JobDescription.objects.create(
             user=verified_user,
+            role_name='Valid Role',
             text='Valid',
             expires_at=timezone.now() + timedelta(hours=23)
         )
@@ -198,6 +183,7 @@ class TestTTLExpiration:
         """Test ResumeGenerationRequest is_expired property."""
         jd = JobDescription.objects.create(
             user=verified_user,
+            role_name='Test Role',
             text='Test',
             expires_at=timezone.now() + timedelta(hours=24)
         )

@@ -77,7 +77,8 @@ class JobDescriptionListCreateView(APIView):
         
         jd = JobDescriptionService.create_job_description(
             user=request.user,
-            text=serializer.validated_data['text']
+            text=serializer.validated_data['text'],
+            role_name=serializer.validated_data['role_name'],
         )
         
         return Response(
@@ -219,11 +220,14 @@ class ResumeListCreateView(APIView):
             user=request.user,
             job_description_id=str(serializer.validated_data['job_description_id']),
             template_id=template_id,
+            sections=serializer.validated_data['sections'],
             idempotency_key=idempotency_key,
         )
         
         # Trigger async processing
-        process_resume_generation.delay(str(generation_request.id))
+        task_result = process_resume_generation.delay(str(generation_request.id))
+        generation_request.celery_task_id = task_result.id
+        generation_request.save(update_fields=['celery_task_id', 'updated_at'])
         
         # Prepare response
         response_data = ResumeGenerationRequestSerializer(generation_request).data
@@ -270,6 +274,29 @@ class ResumeStatusView(APIView):
         return Response(
             ResumeGenerationRequestSerializer(generation_request).data,
             status=status.HTTP_200_OK
+        )
+
+
+class ResumeCancelView(APIView):
+    """
+    POST /resumes/{generation_id}/cancel
+
+    Cancel an in-progress resume generation task.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, generation_id):
+        AuthenticationService.require_verified_email(request.user)
+
+        generation_request = ResumeGenerationService.cancel_generation_request(
+            request.user,
+            str(generation_id),
+        )
+
+        return Response(
+            ResumeGenerationRequestSerializer(generation_request).data,
+            status=status.HTTP_200_OK,
         )
 
 

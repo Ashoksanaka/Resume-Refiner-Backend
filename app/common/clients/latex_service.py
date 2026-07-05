@@ -168,6 +168,55 @@ class LaTeXServiceClient:
         except httpx.HTTPError as e:
             logger.error("LaTeX service HTTP error: %s", str(e))
             raise LatexServiceException("LaTeX service is unavailable")
+
+    async def get_resume_template_content(self, template_id: str) -> str:
+        """
+        Get the ATS reference template (resume_template.tex) for AI customization.
+
+        Args:
+            template_id: ID of the template (e.g. 'main')
+
+        Returns:
+            Resume template LaTeX source as string
+        """
+        logger.info(
+            "[LaTeX Service Client] Fetching resume template from: %s/templates/%s/resume-template",
+            self.base_url,
+            template_id,
+        )
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    f"{self.base_url}/templates/{template_id}/resume-template"
+                )
+
+                if response.status_code == 404:
+                    raise ResourceNotFoundException(
+                        f"Resume template for '{template_id}' not found"
+                    )
+
+                if response.status_code != 200:
+                    logger.error(
+                        "Failed to get resume template %s: %s",
+                        template_id,
+                        response.text,
+                    )
+                    raise LatexServiceException(
+                        "Failed to fetch resume template from LaTeX service"
+                    )
+
+                logger.info(
+                    "[LaTeX Service Client] Resume template received (length: %d chars)",
+                    len(response.text),
+                )
+                return response.text
+
+        except httpx.TimeoutException:
+            logger.error("LaTeX service request timed out")
+            raise LatexServiceException("LaTeX service timed out")
+        except httpx.HTTPError as e:
+            logger.error("LaTeX service HTTP error: %s", str(e))
+            raise LatexServiceException("LaTeX service is unavailable")
     
     async def get_main_template_content(self) -> str:
         """
@@ -343,6 +392,92 @@ class LaTeXServiceClient:
     # =========================================================================
     # Compilation APIs
     # =========================================================================
+
+    async def _compile_via_local_service(
+        self,
+        latex_source: str,
+        output_filename: str,
+        template_id: Optional[str] = None,
+    ) -> CompilationResult:
+        """Compile via the LaTeX microservice (pdflatex + local fix pipeline)."""
+        try:
+            logger.info(
+                "[LaTeX Service Client] Sending compilation request to LaTeX service at: %s/compile",
+                self.base_url,
+            )
+            async with httpx.AsyncClient(timeout=self.timeout * 2) as client:
+                response = await client.post(
+                    f"{self.base_url}/compile",
+                    json={
+                        "latex_source": latex_source,
+                        "filename": output_filename,
+                        "template_id": template_id,
+                    },
+                )
+                logger.info(
+                    "[LaTeX Service Client] Received compilation response (status: %d)",
+                    response.status_code,
+                )
+
+                if response.status_code != 200:
+                    try:
+                        error_data = response.json()
+                        error_detail = error_data.get('detail', {})
+                        if isinstance(error_detail, dict):
+                            error_code = error_detail.get('code', 'LATEX_COMPILE_ERROR')
+                            compilation_id = error_detail.get('compilation_id')
+                            error_msg = error_detail.get('error', 'LaTeX compilation failed')
+                            details = error_detail.get('details', {})
+                            sample = error_detail.get('sample', '')
+
+                            full_error_msg = error_msg
+                            if compilation_id:
+                                full_error_msg += f" (Compilation ID: {compilation_id})"
+                            if details:
+                                if isinstance(details, dict) and 'errors' in details:
+                                    error_list = details.get('errors', [])
+                                    if error_list:
+                                        full_error_msg += f". Errors: {', '.join([e.get('message', '') for e in error_list[:3]])}"
+
+                            raise LatexCompileException(
+                                message=full_error_msg,
+                                details={
+                                    'code': error_code,
+                                    'compilation_id': compilation_id,
+                                    'details': details,
+                                    'sample': sample[:500] if sample else None,
+                                },
+                                error_code=error_code,
+                            )
+                        raise LatexCompileException(str(error_detail))
+                    except LatexCompileException:
+                        raise
+                    except Exception:
+                        raise LatexCompileException(
+                            f"LaTeX compilation failed with status {response.status_code}"
+                        )
+
+                pdf_path = Path(self.output_dir) / f"{output_filename}.pdf"
+                logger.info("[LaTeX Service Client] Saving PDF to: %s", pdf_path)
+                with open(pdf_path, 'wb') as f:
+                    f.write(response.content)
+
+                logger.info(
+                    "[LaTeX Service Client] LaTeX compilation successful via microservice: %s",
+                    pdf_path,
+                )
+                return CompilationResult(
+                    pdf_path=str(pdf_path),
+                    compilation_log="Compiled via LaTeX microservice",
+                    success=True,
+                )
+
+        except httpx.TimeoutException:
+            logger.error("LaTeX service request timed out")
+            raise LatexServiceException("LaTeX service timed out.")
+        except httpx.HTTPError as e:
+            logger.error("LaTeX service HTTP error: %s", str(e))
+            raise LatexServiceException("LaTeX service is unavailable.")
     
     async def compile_latex(
         self,
@@ -371,83 +506,42 @@ class LaTeXServiceClient:
         logger.info("[LaTeX Service Client] LaTeX compilation requested for: %s", output_filename)
         logger.info("[LaTeX Service Client] LaTeX source length: %d chars", len(latex_source))
         logger.debug("[LaTeX Service Client] LaTeX source preview (first 200 chars): %s", latex_source[:200])
-        
-        try:
-            logger.info("[LaTeX Service Client] Sending compilation request to LaTeX service at: %s/compile", self.base_url)
-            async with httpx.AsyncClient(timeout=self.timeout * 2) as client:
-                response = await client.post(
-                    f"{self.base_url}/compile",
-                    json={
-                        "latex_source": latex_source,
-                        "filename": output_filename,
-                        "template_id": template_id
-                    }
+
+        formatex_api_key = getattr(settings, 'FORMATEX_API_KEY', '')
+        formatex_fallback = getattr(settings, 'FORMATEX_FALLBACK_TO_LOCAL', True)
+        if formatex_api_key:
+            from app.latex.ats_preamble import (
+                ensure_ats_resume_preamble,
+                normalize_document_envelope,
+            )
+            from app.common.clients.formatex_client import FormaTeXClient
+
+            normalized_source = normalize_document_envelope(
+                ensure_ats_resume_preamble(latex_source)
+            )
+            logger.info(
+                "[LaTeX Service Client] Delegating compilation to FormaTeX for: %s",
+                output_filename,
+            )
+            try:
+                return await FormaTeXClient().compile(
+                    latex_source=normalized_source,
+                    output_filename=output_filename,
                 )
-                logger.info("[LaTeX Service Client] Received compilation response (status: %d)", response.status_code)
-                
-                if response.status_code != 200:
-                    try:
-                        error_data = response.json()
-                        error_detail = error_data.get('detail', {})
-                        if isinstance(error_detail, dict):
-                            error_code = error_detail.get('code', 'LATEX_COMPILE_ERROR')
-                            compilation_id = error_detail.get('compilation_id')
-                            error_msg = error_detail.get('error', 'LaTeX compilation failed')
-                            details = error_detail.get('details', {})
-                            sample = error_detail.get('sample', '')
-                            
-                            # Build detailed error message
-                            full_error_msg = error_msg
-                            if compilation_id:
-                                full_error_msg += f" (Compilation ID: {compilation_id})"
-                            if details:
-                                if isinstance(details, dict) and 'errors' in details:
-                                    error_list = details.get('errors', [])
-                                    if error_list:
-                                        full_error_msg += f". Errors: {', '.join([e.get('message', '') for e in error_list[:3]])}"
-                            
-                            # Raise with structured details
-                            raise LatexCompileException(
-                                message=full_error_msg,
-                                details={
-                                    'code': error_code,
-                                    'compilation_id': compilation_id,
-                                    'details': details,
-                                    'sample': sample[:500] if sample else None
-                                },
-                                error_code=error_code
-                            )
-                        else:
-                            error_msg = str(error_detail)
-                            raise LatexCompileException(error_msg)
-                    except LatexCompileException:
-                        raise
-                    except Exception:
-                        error_msg = f"LaTeX compilation failed with status {response.status_code}"
-                        raise LatexCompileException(error_msg)
-                
-                # Save the PDF
-                pdf_path = Path(self.output_dir) / f"{output_filename}.pdf"
-                logger.info("[LaTeX Service Client] Saving PDF to: %s", pdf_path)
-                logger.debug("[LaTeX Service Client] PDF size: %d bytes", len(response.content))
-                
-                with open(pdf_path, 'wb') as f:
-                    f.write(response.content)
-                
-                logger.info("[LaTeX Service Client] LaTeX compilation successful via microservice: %s", pdf_path)
-                
-                return CompilationResult(
-                    pdf_path=str(pdf_path),
-                    compilation_log="Compiled via LaTeX microservice",
-                    success=True
+            except LatexCompileException as exc:
+                if not formatex_fallback:
+                    raise
+                logger.warning(
+                    "[LaTeX Service Client] FormaTeX compile failed for %s (%s); falling back to local LaTeX service",
+                    output_filename,
+                    str(exc),
                 )
-            
-        except httpx.TimeoutException:
-            logger.error("LaTeX service request timed out")
-            raise LatexServiceException("LaTeX service timed out.")
-        except httpx.HTTPError as e:
-            logger.error("LaTeX service HTTP error: %s", str(e))
-            raise LatexServiceException("LaTeX service is unavailable.")
+
+        return await self._compile_via_local_service(
+            latex_source=latex_source,
+            output_filename=output_filename,
+            template_id=template_id,
+        )
     
     async def compile_with_profile(
         self,

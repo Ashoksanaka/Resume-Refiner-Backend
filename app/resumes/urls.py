@@ -16,6 +16,7 @@ from app.resumes.views import (
     JobDescriptionDetailView,
     ResumeListCreateView,
     ResumeStatusView,
+    ResumeCancelView,
     ResumeDownloadView,
     ResumeSourceView,
     HealthCheckView,
@@ -31,6 +32,7 @@ urlpatterns = [
     # Resumes
     path('resumes', ResumeListCreateView.as_view(), name='resume-list-create'),
     path('resumes/<uuid:generation_id>/status', ResumeStatusView.as_view(), name='resume-status'),
+    path('resumes/<uuid:generation_id>/cancel', ResumeCancelView.as_view(), name='resume-cancel'),
     path('resumes/<uuid:generation_id>/download', ResumeDownloadView.as_view(), name='resume-download'),
     path('resumes/<uuid:generation_id>/source', ResumeSourceView.as_view(), name='resume-source'),
     

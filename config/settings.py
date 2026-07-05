@@ -155,8 +155,7 @@ if SESSION_COOKIE_SAMESITE == 'None' and not SESSION_COOKIE_SECURE:
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'app.authentication.backends.CsrfExemptSessionAuthentication',
-        'app.authentication.backends.JWTAuthentication',
+        'app.authentication.clerk_auth.ClerkJWTAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
@@ -248,11 +247,22 @@ DATA_TTL_HOURS = config('DATA_TTL_HOURS', default=24, cast=int)
 
 # AI Agent configuration
 AI_AGENT_URL = config('AI_AGENT_URL', default='http://localhost:8001')
-AI_AGENT_TIMEOUT = config('AI_AGENT_TIMEOUT', default=180, cast=int)  # Increased for Gemini API latency (120s) + processing overhead
+AI_AGENT_TIMEOUT = config('AI_AGENT_TIMEOUT', default=300, cast=int)  # NIM latency + agent post-processing
 
 # LaTeX microservice configuration
 LATEX_SERVICE_URL = config('LATEX_SERVICE_URL', default='http://localhost:8002')
 LATEX_SERVICE_TIMEOUT = config('LATEX_SERVICE_TIMEOUT', default=30, cast=int)
+
+# FormaTeX cloud compilation (optional — falls back to LaTeX microservice when unset)
+FORMATEX_API_KEY = config('FORMATEX_API_KEY', default='')
+FORMATEX_API_BASE_URL = config(
+    'FORMATEX_API_BASE_URL',
+    default='https://api.formatex.io/api/v1',
+)
+FORMATEX_ENGINE = config('FORMATEX_ENGINE', default='auto')
+FORMATEX_TIMEOUT = config('FORMATEX_TIMEOUT', default=120, cast=int)
+FORMATEX_USE_SMART_COMPILE = config('FORMATEX_USE_SMART_COMPILE', default=True, cast=bool)
+FORMATEX_FALLBACK_TO_LOCAL = config('FORMATEX_FALLBACK_TO_LOCAL', default=True, cast=bool)
 
 # Resume templates directory
 TEMPLATES_DIR = BASE_DIR / 'templates' / 'resumes'
@@ -262,6 +272,17 @@ GENERATED_PDF_DIR = BASE_DIR / 'generated' / 'pdfs'
 
 # Email verification token expiry
 EMAIL_VERIFICATION_TOKEN_EXPIRY_HOURS = config('EMAIL_VERIFICATION_TOKEN_EXPIRY_HOURS', default=24, cast=int)
+
+
+# =============================================================================
+# CLERK AUTHENTICATION
+# =============================================================================
+
+CLERK_SECRET_KEY = config('CLERK_SECRET_KEY', default='')
+CLERK_JWT_ISSUER = config('CLERK_JWT_ISSUER', default='').rstrip('/')
+CLERK_WEBHOOK_SECRET = config('CLERK_WEBHOOK_SECRET', default='')
+CLERK_AUDIENCE = config('CLERK_AUDIENCE', default='')
+CLERK_JWKS_CACHE_TTL = config('CLERK_JWKS_CACHE_TTL', default=3600, cast=int)
 
 
 # =============================================================================

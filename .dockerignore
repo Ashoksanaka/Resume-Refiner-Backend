@@ -1,0 +1,34 @@
+# Local secrets and virtualenv — never ship in Docker images
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+
+# Git and IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+
+# Python cache and tests
+__pycache__/
+*.py[cod]
+.pytest_cache/
+htmlcov/
+.coverage
+.tox/
+
+# Generated / local artifacts
+generated/
+staticfiles/
+*.pdf
+celerybeat-schedule
+celerybeat.pid
+
+# Docs and dev-only
+*.md
+!README.md
+docker-compose.yml
+docker-compose.override.yml
+railway.toml

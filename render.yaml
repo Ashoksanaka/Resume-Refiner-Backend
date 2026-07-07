@@ -88,7 +88,7 @@ services:
     dockerfilePath: ./Dockerfile
     dockerCommand: /app/scripts/start-render-free.sh
     healthCheckPath: /api/v1/health
-    preDeployCommand: python manage.py migrate --noinput
+    # Migrations run in start-render-free.sh (preDeployCommand not supported on free tier)
     envVars:
       - fromGroup: resume-refiner-env
 

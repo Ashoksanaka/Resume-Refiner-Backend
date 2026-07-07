@@ -170,13 +170,11 @@ In the **`resume-refiner-env`** environment group (or each service), set secrets
 
 Copy values from your local `.env` — do not commit `.env` to git.
 
-**Important:** Set `NVIDIA_API_KEY` and `FORMATEX_API_KEY` on the **worker** service (resume jobs run there).
-
 ### 3. Migrations & health check
 
-- Migrations run automatically via `preDeployCommand` on the web service.
+- Migrations and template sync run at container start via `scripts/start-render-free.sh` (free tier does not support `preDeployCommand`).
 - Health check: `GET /api/v1/health`
-- Note your web URL: `https://resume-refiner-api.onrender.com` (name may vary).
+- Note your web URL after deploy (e.g. `https://resume-refiner-api.onrender.com`).
 
 ### 4. Free tier (all-in-one)
 
@@ -186,11 +184,21 @@ Copy values from your local `.env` — do not commit `.env` to git.
 | Celery worker | Same container (`start-render-free.sh`) |
 | Celery beat | Same container (`start-render-free.sh`) |
 
-Limits: ~512MB RAM, idle spin-down, ephemeral PDF disk. For production scale, split into paid worker services.
+Limits: ~512MB RAM, idle spin-down, ephemeral PDF disk. First request after deploy may be slow (migrate + template sync + cold start).
 
-### 5. Manual deploy (without Blueprint)
+### 5. Post-deploy checklist
 
-Create three Docker services and use these commands:
+1. Copy all secrets from `.env` into Render **Environment** (group `resume-refiner-env`).
+2. Update `ALLOWED_HOSTS` with your exact `*.onrender.com` hostname.
+3. Set Vercel `BACKEND_URL=https://<your-service>.onrender.com`.
+4. Point Clerk webhook to `https://<your-service>.onrender.com/api/v1/auth/clerk/webhook`.
+5. Verify: `curl https://<your-service>.onrender.com/api/v1/health`
+
+**Note:** Generated PDFs are stored on the local filesystem (`generated/pdfs/`). Render's disk is ephemeral — users should download PDFs promptly.
+
+### 6. Manual deploy (paid tier, optional)
+
+Split into separate web + worker + beat services and use:
 
 | Service | Start command |
 |---------|---------------|
@@ -198,9 +206,7 @@ Create three Docker services and use these commands:
 | **Worker** | `celery -A config worker -l info -Q celery,resume_generation,maintenance` |
 | **Beat** | `celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler` |
 
-Set **Pre-Deploy Command** on web: `python manage.py migrate --noinput`
-
-**Note:** Generated PDFs are stored on the local filesystem (`generated/pdfs/`). Render's disk is ephemeral — users should download PDFs promptly. Supabase Storage is recommended for production persistence.
+Paid web services support `preDeployCommand: python manage.py migrate --noinput`.
 
 ## Railway Deployment (alternative)
 

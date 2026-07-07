@@ -96,6 +96,11 @@ media/
 # Docker (optional local overrides)
 docker-compose.override.yml
 
+# Environment secrets
+.env
+.env.local
+.env.*.local
+
 # Celery
 celerybeat-schedule
 celerybeat.pid

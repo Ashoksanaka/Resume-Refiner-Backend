@@ -12,8 +12,10 @@ This configuration is designed for a production-ready MVP with:
 import os
 from pathlib import Path
 from datetime import timedelta
+from urllib.parse import unquote, urlparse
 
 from decouple import config, Csv
+from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -94,19 +96,77 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # DATABASE
 # =============================================================================
 
-DATABASES = {
-    'default': {
+def _database_config() -> dict:
+    """Build Postgres config from POSTGRES_* or DIRECT_URL (Supabase session pooler)."""
+    sslmode = config('POSTGRES_SSLMODE', default='require')
+    direct_url = config('DIRECT_URL', default='')
+
+    if direct_url:
+        parsed = urlparse(direct_url)
+        if parsed.scheme not in ('postgres', 'postgresql'):
+            raise ImproperlyConfigured(
+                f'DIRECT_URL must use postgres:// or postgresql:// (got {parsed.scheme!r}).'
+            )
+        if not parsed.hostname:
+            raise ImproperlyConfigured('DIRECT_URL is missing a hostname.')
+        return {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': (parsed.path or '/postgres').lstrip('/') or 'postgres',
+            'USER': unquote(parsed.username or ''),
+            'PASSWORD': unquote(parsed.password or ''),
+            'HOST': parsed.hostname,
+            'PORT': str(parsed.port or 5432),
+            'OPTIONS': {'sslmode': sslmode},
+        }
+
+    host = config('POSTGRES_HOST', default='')
+    if not DEBUG and not host:
+        raise ImproperlyConfigured(
+            'Database not configured for production. Set DIRECT_URL or POSTGRES_HOST '
+            '(and POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD) in Render → '
+            'Environment → resume-refiner-env.'
+        )
+
+    return {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': config('POSTGRES_DB', default='resumeai'),
         'USER': config('POSTGRES_USER', default='resumeai'),
         'PASSWORD': config('POSTGRES_PASSWORD', default='resumeai'),
-        'HOST': config('POSTGRES_HOST', default='localhost'),
+        'HOST': host or 'localhost',
         'PORT': config('POSTGRES_PORT', default='5432'),
-        'OPTIONS': {
-            'sslmode': config('POSTGRES_SSLMODE', default='require'),
-        },
+        'OPTIONS': {'sslmode': sslmode},
     }
+
+
+DATABASES = {
+    'default': _database_config(),
 }
+
+
+def _require_production_env() -> None:
+    """Fail fast with a clear error when Render env vars were not set."""
+    if DEBUG:
+        return
+    missing = []
+    if not config('SECRET_KEY', default=''):
+        missing.append('SECRET_KEY')
+    if not config('DIRECT_URL', default='') and not config('POSTGRES_HOST', default=''):
+        missing.append('DIRECT_URL or POSTGRES_HOST')
+    if not config('CELERY_BROKER_URL', default=''):
+        missing.append('CELERY_BROKER_URL')
+    if not config('CLERK_SECRET_KEY', default=''):
+        missing.append('CLERK_SECRET_KEY')
+    if not config('CLERK_JWT_ISSUER', default=''):
+        missing.append('CLERK_JWT_ISSUER')
+    if missing:
+        raise ImproperlyConfigured(
+            'Missing required environment variables for production: '
+            + ', '.join(missing)
+            + '. Add them in Render Dashboard → Environment → resume-refiner-env.'
+        )
+
+
+_require_production_env()
 
 
 # =============================================================================

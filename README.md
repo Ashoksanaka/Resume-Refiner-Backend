@@ -104,7 +104,7 @@ Create a `.env` file in the backend directory. See `.env.example` for the full l
 # Django
 SECRET_KEY=your-secret-key-here
 DEBUG=False
-ALLOWED_HOSTS=localhost,127.0.0.1,.onrender.com,resume-refiner-api.onrender.com
+ALLOWED_HOSTS=localhost,127.0.0.1,.onrender.com,resume-refiner-api-vulk.onrender.com
 CORS_ALLOWED_ORIGINS=http://localhost:3000,https://your-app.vercel.app
 CSRF_TRUSTED_ORIGINS=http://localhost:3000,https://your-app.vercel.app
 
@@ -152,12 +152,21 @@ Deploy the backend from this repo using [`render.yaml`](render.yaml) (free tier)
 
 ### 2. Set environment variables
 
-In the **`resume-refiner-env`** environment group (or each service), set secrets marked `sync: false` in `render.yaml`:
+**This is the most common deploy failure:** if `POSTGRES_*` / `DIRECT_URL` are missing, Django falls back to `localhost` and migrate crashes.
 
+In Render → **Environment** → group **`resume-refiner-env`**, copy every variable from your local `.env` (see [`render.env.example`](render.env.example)).
+
+**Fastest fix:** set `DIRECT_URL` to your Supabase **session mode** URL (port `5432`):
+
+```bash
+DIRECT_URL=postgresql://postgres.xxxxx:YOUR_PASSWORD@aws-1-ap-south-1.pooler.supabase.com:5432/postgres
+```
+
+Also required:
 | Variable | Source |
 |----------|--------|
-| `SECRET_KEY` | Django secret (generate a strong random string) |
-| `POSTGRES_*` | Supabase Session mode (port `5432`) |
+| `DIRECT_URL` | Supabase session pooler URL (port `5432`) — **or** all `POSTGRES_*` |
+| `SECRET_KEY` | Django secret |
 | `CELERY_BROKER_URL` | Redis Cloud `rediss://` URL |
 | `NVIDIA_API_KEY` | NVIDIA NIM dashboard |
 | `FORMATEX_API_KEY` | FormaTeX dashboard |
@@ -173,8 +182,8 @@ Copy values from your local `.env` — do not commit `.env` to git.
 ### 3. Migrations & health check
 
 - Migrations and template sync run at container start via `scripts/start-render-free.sh` (free tier does not support `preDeployCommand`).
+- Live API: `https://resume-refiner-api-vulk.onrender.com`
 - Health check: `GET /api/v1/health`
-- Note your web URL after deploy (e.g. `https://resume-refiner-api.onrender.com`).
 
 ### 4. Free tier (all-in-one)
 
@@ -223,13 +232,13 @@ Same 3-service pattern as Render. See [`Procfile`](Procfile) and [`railway.toml`
 In the Resume-Refiner-frontend Vercel project:
 
 ```bash
-BACKEND_URL=https://resume-refiner-api.onrender.com
+BACKEND_URL=https://resume-refiner-api-vulk.onrender.com
 ```
 
 Update Clerk webhook endpoint to:
 
 ```
-https://resume-refiner-api.onrender.com/api/v1/auth/clerk/webhook
+https://resume-refiner-api-vulk.onrender.com/api/v1/auth/clerk/webhook
 ```
 
 Ensure Django `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, and `CSRF_TRUSTED_ORIGINS` include your Vercel domain and Render API domain.

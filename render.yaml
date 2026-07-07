@@ -19,7 +19,7 @@ envVarGroups:
       - key: DEBUG
         value: "False"
       - key: ALLOWED_HOSTS
-        value: localhost,127.0.0.1,.onrender.com
+        value: localhost,127.0.0.1,.onrender.com,resume-refiner-api-vulk.onrender.com
       - key: SESSION_COOKIE_SECURE
         value: "True"
       - key: SESSION_COOKIE_SAMESITE
@@ -48,7 +48,9 @@ envVarGroups:
         value: "24"
       - key: CLERK_JWKS_CACHE_TTL
         value: "3600"
-      # --- Set these in the Render dashboard (Environment) ---
+      # --- REQUIRED: set every variable below in Render → Environment ---
+      - key: DIRECT_URL
+        sync: false
       - key: SECRET_KEY
         sync: false
       - key: POSTGRES_HOST

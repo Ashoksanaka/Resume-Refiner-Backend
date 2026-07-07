@@ -1,10 +1,10 @@
 """
-Django management command to sync templates from LaTeX service.
+Django management command to sync templates from filesystem.
 
 Usage:
     python manage.py sync_templates
     python manage.py sync_templates --generate-previews
-    python manage.py sync_templates --template-id=altacv
+    python manage.py sync_templates --template-id=main
 """
 
 import asyncio
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
-    help = 'Sync templates from LaTeX microservice to database'
+    help = 'Sync templates from filesystem to database'
     
     def add_arguments(self, parser):
         parser.add_argument(
@@ -58,7 +58,7 @@ class Command(BaseCommand):
                     result = loop.run_until_complete(self._sync_single(template_id, generate_previews or force_preview))
                 else:
                     # Sync all templates
-                    self.stdout.write("Syncing all templates from LaTeX service...")
+                    self.stdout.write("Syncing all templates from filesystem...")
                     result = loop.run_until_complete(self._sync_all(generate_previews, force_preview))
                 
                 self.stdout.write(self.style.SUCCESS(
@@ -106,7 +106,7 @@ class Command(BaseCommand):
         template = await TemplateSyncService.sync_single_template(template_id)
         
         if not template:
-            raise CommandError(f"Template '{template_id}' not found in LaTeX service")
+            raise CommandError(f"Template '{template_id}' not found on filesystem")
         
         result = {
             'template_id': template.id,

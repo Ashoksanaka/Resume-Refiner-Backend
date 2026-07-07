@@ -1,38 +1,9 @@
 version: '3.8'
 
+# Local dev only — Postgres (Supabase) and Redis (Redis Cloud) are external.
+# Copy .env.example to .env and set cloud connection strings before starting.
+
 services:
-  # =============================================================================
-  # PostgreSQL Database
-  # =============================================================================
-  db:
-    image: postgres:15-alpine
-    container_name: resumeai-db
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    # Ports removed for security (internal access only)
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  # =============================================================================
-  # Redis (Celery broker and cache)
-  # =============================================================================
-  redis:
-    image: redis:7-alpine
-    container_name: resumeai-redis
-    # Ports removed for security (internal access only)
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   # =============================================================================
   # Django Backend
   # =============================================================================
@@ -41,30 +12,21 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: resumeai-backend
-    # Override default gunicorn command for dev experience (hot reload)
-    # For production, remove this command to use the Dockerfile's default CMD
     command: >
       sh -c "python manage.py migrate &&
              python manage.py runserver 0.0.0.0:8000"
     volumes:
       - .:/app
       - generated_pdfs:/app/generated/pdfs
-      - ../.cursor:/cursor-debug
     ports:
       - "8000:8000"
     env_file: .env
     environment:
-      # FormaTeX PDF compilation (optional; unset FORMATEX_API_KEY to use local LaTeX service)
       FORMATEX_API_KEY: ${FORMATEX_API_KEY:-}
       FORMATEX_API_BASE_URL: ${FORMATEX_API_BASE_URL:-https://api.formatex.io/api/v1}
       FORMATEX_ENGINE: ${FORMATEX_ENGINE:-auto}
       FORMATEX_TIMEOUT: ${FORMATEX_TIMEOUT:-120}
       FORMATEX_USE_SMART_COMPILE: ${FORMATEX_USE_SMART_COMPILE:-True}
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/admin/login/"]
       interval: 10s
@@ -84,7 +46,6 @@ services:
     volumes:
       - .:/app
       - generated_pdfs:/app/generated/pdfs
-      - ../.cursor:/cursor-debug
     env_file: .env
     environment:
       FORMATEX_API_KEY: ${FORMATEX_API_KEY:-}
@@ -94,7 +55,6 @@ services:
       FORMATEX_USE_SMART_COMPILE: ${FORMATEX_USE_SMART_COMPILE:-True}
     depends_on:
       - backend
-      - redis
 
   # =============================================================================
   # Celery Beat (Scheduler)
@@ -110,54 +70,6 @@ services:
     env_file: .env
     depends_on:
       - backend
-      - redis
-
-  # =============================================================================
-  # AI Agent Microservice (Stub)
-  # =============================================================================
-  agent:
-    build:
-      context: ./services/agent
-      dockerfile: Dockerfile
-    container_name: resumeai-agent
-    env_file: .env
-    environment:
-      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
-      - NVIDIA_MODEL=${NVIDIA_MODEL:-nvidia/nemotron-3-super-120b-a12b}
-      - NVIDIA_API_BASE_URL=${NVIDIA_API_BASE_URL:-https://integrate.api.nvidia.com/v1}
-      - NVIDIA_REQUEST_TIMEOUT=${NVIDIA_REQUEST_TIMEOUT:-180}
-    volumes:
-      - ./services/agent:/app
-      - ../.cursor:/cursor-debug
-    healthcheck:
-      test: ["CMD-SHELL", "grep -q 'uvicorn' /proc/1/cmdline || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-  # =============================================================================
-  # LaTeX Microservice
-  # =============================================================================
-  latex:
-    build:
-      context: ./services/latex
-      dockerfile: Dockerfile
-    container_name: resumeai-latex
-    environment:
-      - LATEX_COMPILE_TIMEOUT=${LATEX_COMPILE_TIMEOUT:-60}
-    volumes:
-      - generated_pdfs:/app/output
-      - ./services/latex/templates:/app/templates
-      - ./services/latex/ats_preamble.py:/app/ats_preamble.py
-      - ./services/latex/validator.py:/app/validator.py
-    healthcheck:
-      test: ["CMD-SHELL", "grep -q 'uvicorn' /proc/1/cmdline || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-
 
 volumes:
-  postgres_data:
   generated_pdfs:

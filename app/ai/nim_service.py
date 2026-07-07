@@ -1,54 +1,50 @@
-"""AI Agent Microservice for Resume AI Platform.
+"""NVIDIA NIM resume customization (in-process, no microservice).
 
-This service handles resume generation using NVIDIA NIM (OpenAI-compatible API).
-It customizes a fixed ATS LaTeX template using the candidate profile, job description,
-and an explicit list of selected profile sections.
-
-CRITICAL RULES:
-- The AI CUSTOMIZES the provided LaTeX template (does not generate from scratch)
-- Only SELECTED_SECTIONS (+ personalInfo header) appear in the output
-- The AI CUSTOMIZES content, it does NOT invent
-- All company names, institutions, dates must come from the profile
-- The output must be valid LaTeX that compiles
-- The output must be ATS-friendly (single-column, simple layout)
-
-SECURITY:
-- User inputs are sanitized to prevent prompt injection
-- LaTeX special characters are escaped
+Customizes ATS LaTeX templates via NVIDIA NIM OpenAI-compatible API.
 """
 
-import os
 import re
 import logging
 import json
 import asyncio
-import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, field_validator
+
+from django.conf import settings
 from openai import OpenAI, APIStatusError, APITimeoutError, RateLimitError
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-app = FastAPI(
-    title="Resume AI Agent",
-    description="AI-powered resume customization service using NVIDIA NIM",
-    version="1.0.0"
+from app.common.exceptions import (
+    AIServiceException,
+    AIServiceQuotaExceededException,
+    ModelOutputInvalidException,
 )
 
-# Configure NVIDIA NIM (OpenAI-compatible cloud API)
-NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
-NVIDIA_API_BASE_URL = os.getenv("NVIDIA_API_BASE_URL", "https://integrate.api.nvidia.com/v1")
-NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-super-120b-a12b")
-NVIDIA_REQUEST_TIMEOUT = int(os.getenv("NVIDIA_REQUEST_TIMEOUT", "180"))
+logger = logging.getLogger(__name__)
 
-nim_client: Optional[OpenAI] = None
-if NVIDIA_API_KEY:
-    nim_client = OpenAI(base_url=NVIDIA_API_BASE_URL, api_key=NVIDIA_API_KEY)
-else:
-    logger.warning("NVIDIA_API_KEY not set. AI generation will fail.")
+ALLOWED_PROFILE_SECTIONS = frozenset({
+    'personalInfo', 'summary', 'experience', 'education', 'skills',
+    'certifications', 'projects', 'achievements', 'publications', 'patents',
+    'licenses', 'trainings', 'volunteering', 'organizations', 'positions',
+    'career_breaks', 'languages', 'test_scores', 'areas_of_interest', 'hobbies',
+})
+
+
+def _get_nim_client() -> Optional[OpenAI]:
+    api_key = getattr(settings, 'NVIDIA_API_KEY', '')
+    if not api_key:
+        return None
+    base_url = getattr(settings, 'NVIDIA_API_BASE_URL', 'https://integrate.api.nvidia.com/v1')
+    return OpenAI(base_url=base_url, api_key=api_key)
+
+
+def _nim_model() -> str:
+    return getattr(settings, 'NVIDIA_MODEL', 'nvidia/nemotron-3-super-120b-a12b')
+
+
+def _nim_timeout() -> int:
+    return int(getattr(settings, 'NVIDIA_REQUEST_TIMEOUT', 180))
+
 
 _SECTION_HEADING_RE = re.compile(r'\\(?:section\*?\{|resumeSectionTitle\{)')
 
@@ -191,72 +187,100 @@ ALLOWED_PROFILE_SECTIONS = frozenset({
 })
 
 
-class GenerationRequest(BaseModel):
-    """Request model for template-based resume generation."""
-    profile: dict
-    job_description: str
-    template: str
-    template_id: str
-    selected_sections: list[str]
+INJECTION_PATTERNS = [
+    r'ignore\s+(all\s+)?(previous|above|prior)\s+instructions?',
+    r'disregard\s+(all\s+)?(previous|above|prior)',
+    r'forget\s+(all\s+)?(previous|above|prior)',
+    r'you\s+are\s+now\s+a',
+    r'new\s+instructions?:',
+    r'system\s*:\s*',
+    r'<\s*system\s*>',
+    r'\[\s*system\s*\]',
+]
 
-    @field_validator('job_description')
-    @classmethod
-    def validate_job_description(cls, v: str) -> str:
-        """Validate and sanitize job description."""
-        if not v or not v.strip():
-            raise ValueError('Job description cannot be empty')
-        if len(v) > 20000:
-            raise ValueError('Job description exceeds maximum length')
-        return sanitize_for_prompt(v.strip())
-
-    @field_validator('template')
-    @classmethod
-    def validate_template(cls, v: str) -> str:
-        """Require non-empty ATS reference template content."""
-        if not v or not v.strip():
-            raise ValueError('Template content cannot be empty')
-        if len(v) > 500000:
-            raise ValueError('Template content exceeds maximum length')
-        return v
-
-    @field_validator('template_id')
-    @classmethod
-    def validate_template_id(cls, v: str) -> str:
-        """Validate template ID format."""
-        if not re.match(r'^[a-zA-Z0-9_-]+$', v):
-            raise ValueError('Invalid template ID format')
-        return v
-
-    @field_validator('selected_sections')
-    @classmethod
-    def validate_selected_sections(cls, v: list[str]) -> list[str]:
-        """Validate selected profile section keys."""
-        if not v:
-            raise ValueError('At least one section must be selected')
-        invalid = set(v) - ALLOWED_PROFILE_SECTIONS
-        if invalid:
-            raise ValueError(f'Invalid section keys: {sorted(invalid)}')
-        return list(dict.fromkeys(v))
+# LaTeX special characters that need escaping
+LATEX_SPECIAL_CHARS = {
+    '&': r'\&',
+    '%': r'\%',
+    '$': r'\$',
+    '#': r'\#',
+    '_': r'\_',
+    '{': r'\{',
+    '}': r'\}',
+    '~': r'\textasciitilde{}',
+    '^': r'\textasciicircum{}',
+    '\\': r'\textbackslash{}',
+}
 
 
-class GenerationResponse(BaseModel):
-    """Response model for resume generation."""
-    latex_source: str
-    modifications: list[str]
+def sanitize_for_prompt(text: str) -> str:
+    """
+    Sanitize user input to prevent prompt injection.
+    
+    This function:
+    1. Removes potential injection patterns
+    2. Escapes special delimiters
+    3. Truncates excessively long inputs
+    """
+    if not text:
+        return text
+    
+    # Truncate to reasonable length (20KB max for JD)
+    text = text[:20000]
+    
+    # Check for and log potential injection attempts (but don't block - just sanitize)
+    text_lower = text.lower()
+    for pattern in INJECTION_PATTERNS:
+        if re.search(pattern, text_lower, re.IGNORECASE):
+            logger.warning("Potential prompt injection pattern detected and sanitized")
+            # Replace the pattern with safe placeholder
+            text = re.sub(pattern, '[FILTERED]', text, flags=re.IGNORECASE)
+    
+    # Escape XML/HTML-like tags that could confuse the model
+    text = re.sub(r'<\s*/?(?:system|user|assistant|instruction|prompt)[^>]*>', '[TAG]', text, flags=re.IGNORECASE)
+    
+    return text
 
 
-@app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    return {"status": "ok"}
+def escape_latex(text: str) -> str:
+    """
+    Escape LaTeX special characters in user-provided text.
+    
+    This prevents LaTeX injection attacks where malicious input
+    could execute arbitrary TeX commands.
+    """
+    if not text:
+        return text
+    
+    # First escape backslashes, then other special chars
+    result = text.replace('\\', r'\textbackslash{}')
+    
+    for char, replacement in LATEX_SPECIAL_CHARS.items():
+        if char != '\\':  # Already handled
+            result = result.replace(char, replacement)
+    
+    return result
+
+
+def sanitize_profile_for_latex(profile: dict) -> dict:
+    """
+    Recursively escape LaTeX special characters in all string values of the profile.
+    """
+    if isinstance(profile, dict):
+        return {k: sanitize_profile_for_latex(v) for k, v in profile.items()}
+    elif isinstance(profile, list):
+        return [sanitize_profile_for_latex(item) for item in profile]
+    elif isinstance(profile, str):
+        return escape_latex(profile)
+    else:
+        return profile
+
 
 
 def load_system_prompt() -> str:
-    """Load the system prompt from file."""
-    prompt_path = os.path.join(os.path.dirname(__file__), 'prompts', 'resume_customization.txt')
+    prompt_path = Path(__file__).resolve().parent / 'prompts' / 'resume_customization.txt'
     try:
-        with open(prompt_path, 'r') as f:
-            return f.read()
+        return prompt_path.read_text(encoding='utf-8')
     except FileNotFoundError:
         logger.warning("Prompt file not found, using fallback")
         return ""
@@ -271,7 +295,6 @@ def build_user_prompt(
     profile_json: str,
     template_content: str,
 ) -> str:
-    """Build structured user message with template, sections, JD, and profile."""
     sections_json = json.dumps(selected_sections)
     return f"""SELECTED_SECTIONS: {sections_json}
 
@@ -292,10 +315,33 @@ Customize the template per your instructions. Rewrite all narrative content (sum
 
 @dataclass
 class NimChatResult:
-    """Result from an NVIDIA NIM chat completion call."""
     content: str
     finish_reason: Optional[str] = None
 
+
+def _validate_generation_inputs(
+    profile: dict,
+    job_description: str,
+    template: str,
+    template_id: str,
+    selected_sections: list[str],
+) -> tuple[str, list[str]]:
+    if not job_description or not job_description.strip():
+        raise AIServiceException('Job description cannot be empty')
+    if len(job_description) > 20000:
+        raise AIServiceException('Job description exceeds maximum length')
+    if not template or not template.strip():
+        raise AIServiceException('Template content cannot be empty')
+    if not re.match(r'^[a-zA-Z0-9_-]+$', template_id):
+        raise AIServiceException('Invalid template ID format')
+    if not selected_sections:
+        raise AIServiceException('At least one section must be selected')
+    invalid = set(selected_sections) - ALLOWED_PROFILE_SECTIONS
+    if invalid:
+        raise AIServiceException(f'Invalid section keys: {sorted(invalid)}')
+    safe_jd = sanitize_for_prompt(job_description.strip())
+    sections = list(dict.fromkeys(selected_sections))
+    return safe_jd, sections
 
 async def call_nim_chat(messages: list, max_tokens: int = 16384) -> NimChatResult:
     """
@@ -303,8 +349,9 @@ async def call_nim_chat(messages: list, max_tokens: int = 16384) -> NimChatResul
 
     Uses OpenAI-compatible API with thinking disabled for structured LaTeX output.
     """
-    if not nim_client:
-        raise HTTPException(status_code=500, detail="NVIDIA_API_KEY is not configured")
+    client = _get_nim_client()
+    if not client:
+        raise AIServiceException("NVIDIA_API_KEY is not configured")
 
     max_retries = 2
     last_error: Optional[Exception] = None
@@ -313,17 +360,17 @@ async def call_nim_chat(messages: list, max_tokens: int = 16384) -> NimChatResul
         try:
             logger.info(
                 "[AI Agent Service] Calling NVIDIA NIM API (model: %s, attempt %d/%d)",
-                NVIDIA_MODEL,
+                _nim_model(),
                 attempt + 1,
                 max_retries + 1,
             )
-            response = nim_client.chat.completions.create(
-                model=NVIDIA_MODEL,
+            response = client.chat.completions.create(
+                model=_nim_model(),
                 messages=messages,
                 temperature=0.7,
                 top_p=0.95,
                 max_tokens=max_tokens,
-                timeout=NVIDIA_REQUEST_TIMEOUT,
+                timeout=_nim_timeout(),
                 extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             )
             choice = response.choices[0]
@@ -333,24 +380,16 @@ async def call_nim_chat(messages: list, max_tokens: int = 16384) -> NimChatResul
             return NimChatResult(content=content, finish_reason=finish_reason)
         except RateLimitError as model_error:
             logger.error("NVIDIA NIM API quota/rate limit exceeded: %s", model_error)
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": "AI service quota exceeded. Please try again later.",
-                    "code": "AI_SERVICE_ERROR",
-                },
+            raise AIServiceQuotaExceededException(
+                "AI service quota exceeded. Please try again later."
             ) from model_error
         except APIStatusError as model_error:
             error_msg = str(model_error).lower()
             last_error = model_error
             if model_error.status_code == 404 or "not found" in error_msg:
-                logger.error("NVIDIA NIM model not found: %s, error: %s", NVIDIA_MODEL, model_error)
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "error": f"AI model '{NVIDIA_MODEL}' not available. Please check configuration.",
-                        "code": "AI_SERVICE_ERROR",
-                    },
+                logger.error("NVIDIA NIM model not found: %s, error: %s", _nim_model(), model_error)
+                raise AIServiceException(
+                    f"AI model '{_nim_model()}' not available. Please check configuration."
                 ) from model_error
             if attempt < max_retries:
                 logger.warning(
@@ -361,12 +400,8 @@ async def call_nim_chat(messages: list, max_tokens: int = 16384) -> NimChatResul
                 await asyncio.sleep(2 ** attempt)
                 continue
             logger.error("NVIDIA NIM API failed after %d attempts: %s", max_retries + 1, model_error)
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": "AI service is temporarily unavailable. Please try again.",
-                    "code": "AI_SERVICE_ERROR",
-                },
+            raise AIServiceException(
+                "AI service is temporarily unavailable. Please try again."
             ) from model_error
         except APITimeoutError as model_error:
             last_error = model_error
@@ -379,24 +414,16 @@ async def call_nim_chat(messages: list, max_tokens: int = 16384) -> NimChatResul
                 await asyncio.sleep(2 ** attempt)
                 continue
             logger.error("NVIDIA NIM API timed out after %d attempts", max_retries + 1)
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": "AI service is temporarily unavailable. Please try again.",
-                    "code": "AI_SERVICE_ERROR",
-                },
+            raise AIServiceException(
+                "AI service is temporarily unavailable. Please try again."
             ) from model_error
         except Exception as model_error:
             error_msg = str(model_error).lower()
             last_error = model_error
             if "quota" in error_msg or "rate limit" in error_msg:
                 logger.error("NVIDIA NIM API quota exceeded: %s", model_error)
-                raise HTTPException(
-                    status_code=503,
-                    detail={
-                        "error": "AI service quota exceeded. Please try again later.",
-                        "code": "AI_SERVICE_ERROR",
-                    },
+                raise AIServiceQuotaExceededException(
+                    "AI service quota exceeded. Please try again later."
                 ) from model_error
             if attempt < max_retries:
                 logger.warning(
@@ -407,20 +434,12 @@ async def call_nim_chat(messages: list, max_tokens: int = 16384) -> NimChatResul
                 await asyncio.sleep(2 ** attempt)
                 continue
             logger.error("NVIDIA NIM API failed after %d attempts: %s", max_retries + 1, model_error)
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": "AI service is temporarily unavailable. Please try again.",
-                    "code": "AI_SERVICE_ERROR",
-                },
+            raise AIServiceException(
+                "AI service is temporarily unavailable. Please try again."
             ) from model_error
 
-    raise HTTPException(
-        status_code=503,
-        detail={
-            "error": "AI service is temporarily unavailable. Please try again.",
-            "code": "AI_SERVICE_ERROR",
-        },
+    raise AIServiceException(
+        "AI service is temporarily unavailable. Please try again."
     ) from last_error
 
 
@@ -779,52 +798,47 @@ def fix_latex_issues(latex_source: str) -> str:
     return latex_source
 
 
-@app.post("/generate", response_model=GenerationResponse)
-async def generate_resume(request: GenerationRequest):
-    """
-    Customize the ATS LaTeX template for the candidate profile and job description.
 
-    The AI receives the full reference template, filtered profile JSON, job description,
-    and SELECTED_SECTIONS. It returns a complete compile-ready document containing only
-    the selected sections (+ personalInfo header).
-
-    Security measures:
-    - Job description is sanitized against prompt injection
-    - Profile data has LaTeX special characters escaped
-    - Strict output validation
-
-    CRITICAL: This endpoint must NEVER return hallucinated content.
-    """
-    if not NVIDIA_API_KEY:
-        raise HTTPException(status_code=500, detail="NVIDIA_API_KEY is not configured")
+async def generate_resume(
+    profile: dict,
+    job_description: str,
+    template: str,
+    template_id: str,
+    selected_sections: list[str],
+) -> dict:
+    """Customize ATS LaTeX template via NVIDIA NIM. Returns latex_source and modifications."""
+    safe_jd, selected_sections = _validate_generation_inputs(
+        profile, job_description, template, template_id, selected_sections
+    )
+    if not _get_nim_client():
+        raise AIServiceException("NVIDIA_API_KEY is not configured")
 
     logger.info(
         "[AI Agent Service] Customizing template %s for sections: %s",
-        request.template_id,
-        request.selected_sections,
+        template_id,
+        selected_sections,
     )
     
     try:
         logger.info("[AI Agent Service] Sanitizing user profile for LaTeX (escaping special characters)")
-        safe_profile = sanitize_profile_for_latex(request.profile)
+        safe_profile = sanitize_profile_for_latex(profile)
         profile_json = json.dumps(safe_profile, indent=2)
         logger.info("[AI Agent Service] Profile sanitized. Profile JSON length: %d chars", len(profile_json))
         
         profile_summary = {
-            'selected_sections': request.selected_sections,
+            'selected_sections': selected_sections,
             'profile_keys': list(safe_profile.keys()),
         }
         logger.info("[AI Agent Service] Parsed user profile summary: %s", profile_summary)
         
-        safe_jd = request.job_description
         logger.info("[AI Agent Service] Job description length: %d chars", len(safe_jd))
-        logger.info("[AI Agent Service] Template content length: %d chars", len(request.template))
+        logger.info("[AI Agent Service] Template content length: %d chars", len(template))
         
         user_prompt = build_user_prompt(
-            selected_sections=request.selected_sections,
+            selected_sections=selected_sections,
             job_description=safe_jd,
             profile_json=profile_json,
-            template_content=request.template,
+            template_content=template,
         )
         
         logger.info(
@@ -838,7 +852,7 @@ async def generate_resume(request: GenerationRequest):
             {"role": "user", "content": user_prompt},
         ]
 
-        logger.info("[AI Agent Service] Using NVIDIA NIM model: %s", NVIDIA_MODEL)
+        logger.info("[AI Agent Service] Using NVIDIA NIM model: %s", _nim_model())
 
         nim_result = await call_nim_chat(messages)
         latex_source = nim_result.content
@@ -982,7 +996,7 @@ async def generate_resume(request: GenerationRequest):
                 logger.info("[AI Agent Service] Attempting to request continuation from AI")
                 continuation_prompt = f"""The LaTeX document you produced is incomplete.
 
-SELECTED_SECTIONS: {json.dumps(request.selected_sections)}
+SELECTED_SECTIONS: {json.dumps(selected_sections)}
 
 Continue customizing the template. Include all selected sections that have profile data, preserve template macros and preamble, and close with \\end{{document}}.
 
@@ -1074,40 +1088,22 @@ Continue from where you left off. Output ONLY LaTeX — no markdown fences."""
         # Validate output structure - CRITICAL CHECKS
         if not latex_source.startswith('\\documentclass'):
             logger.error("AI output does not start with \\documentclass")
-            raise HTTPException(
-                status_code=500, 
-                detail={
-                    "error": "AI generated invalid output format",
-                    "code": "MODEL_OUTPUT_INVALID"
-                }
-            )
+            raise ModelOutputInvalidException("AI generated invalid output format")
         
         if '\\begin{document}' not in latex_source:
             logger.error("AI output missing \\begin{document}")
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "AI generated incomplete LaTeX document (missing \\begin{document})",
-                    "code": "MODEL_OUTPUT_INVALID"
-                }
-            )
+            raise ModelOutputInvalidException("AI generated incomplete LaTeX document (missing \\begin{document})")
         
         if '\\end{document}' not in latex_source:
             logger.error("AI output missing \\end{document}")
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "AI generated incomplete LaTeX document (missing \\end{document})",
-                    "code": "MODEL_OUTPUT_INVALID"
-                }
-            )
+            raise ModelOutputInvalidException("AI generated incomplete LaTeX document (missing \\end{document})")
         
         # CRITICAL VALIDATION: document must include content for selected sections
         body_start = latex_source.find('\\begin{document}')
         body_end = latex_source.find('\\end{document}')
         if body_start != -1 and body_end != -1:
             body_content = latex_source[body_start:body_end]
-            selected = set(request.selected_sections) | {'personalInfo'}
+            selected = set(selected_sections) | {'personalInfo'}
             content_sections = selected - {'personalInfo'}
             has_sections = _has_section_headings(body_content)
             has_list_items = bool(re.search(r'\\item', body_content))
@@ -1116,61 +1112,31 @@ Continue from where you left off. Output ONLY LaTeX — no markdown fences."""
 
             if not has_header and 'personalInfo' in selected:
                 logger.error("AI output missing personalInfo header macros")
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "error": "AI generated incomplete LaTeX document - missing header",
-                        "code": "MODEL_OUTPUT_INVALID",
-                    },
-                )
+                raise ModelOutputInvalidException("AI generated incomplete LaTeX document - missing header")
 
             if content_sections and not has_sections:
                 logger.error("AI output missing section headings for selected sections")
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "error": "AI generated incomplete LaTeX document - missing selected section content",
-                        "code": "MODEL_OUTPUT_INVALID",
-                    },
-                )
+                raise ModelOutputInvalidException("AI generated incomplete LaTeX document - missing selected section content")
 
             if content_sections and has_sections and not has_list_items and not has_body_content:
                 logger.error("AI output has section headers but no list content")
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "error": "AI generated incomplete LaTeX document - sections contain no content",
-                        "code": "MODEL_OUTPUT_INVALID",
-                    },
-                )
+                raise ModelOutputInvalidException("AI generated incomplete LaTeX document - sections contain no content")
 
         modifications = [
             "Customized template content based on job description keywords",
-            f"Included sections: {', '.join(request.selected_sections)}",
+            f"Included sections: {', '.join(selected_sections)}",
             "Preserved ATS-safe template structure",
         ]
         
-        logger.info("Resume customization successful for template: %s", request.template_id)
+        logger.info("Resume customization successful for template: %s", template_id)
         
-        return GenerationResponse(
-            latex_source=latex_source,
-            modifications=modifications
-        )
-        
-    except HTTPException:
+        return {
+            "latex_source": latex_source,
+            "modifications": modifications,
+        }
+
+    except (AIServiceException, AIServiceQuotaExceededException, ModelOutputInvalidException):
         raise
     except Exception as e:
         logger.exception("Error generating resume: %s", type(e).__name__)
-        # Don't expose internal error details to prevent information leakage
-        raise HTTPException(
-            status_code=500, 
-            detail={
-                "error": "Resume generation failed due to an internal error",
-                "code": "AI_SERVICE_ERROR"
-            }
-        )
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+        raise AIServiceException("Resume generation failed due to an internal error") from e

@@ -27,6 +27,11 @@ SECRET_KEY = config('SECRET_KEY', default='django-insecure-dev-key-change-in-pro
 DEBUG = config('DEBUG', default=False, cast=bool)
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=Csv())
 
+# Behind Render/Railway reverse proxy (HTTPS termination at edge)
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    USE_X_FORWARDED_HOST = True
+
 
 # =============================================================================
 # APPLICATION DEFINITION
@@ -97,6 +102,9 @@ DATABASES = {
         'PASSWORD': config('POSTGRES_PASSWORD', default='resumeai'),
         'HOST': config('POSTGRES_HOST', default='localhost'),
         'PORT': config('POSTGRES_PORT', default='5432'),
+        'OPTIONS': {
+            'sslmode': config('POSTGRES_SSLMODE', default='require'),
+        },
     }
 }
 
@@ -237,6 +245,11 @@ CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = config('CELERY_TASK_TIME_LIMIT', default=300, cast=int)  # 5 minutes max per task
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
+# Redis Cloud TLS broker (rediss://)
+if CELERY_BROKER_URL.startswith('rediss://'):
+    import ssl
+    CELERY_BROKER_USE_SSL = {'ssl_cert_reqs': ssl.CERT_REQUIRED}
+
 
 # =============================================================================
 # APPLICATION-SPECIFIC SETTINGS
@@ -245,15 +258,16 @@ CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 # TTL for temporary resources (job descriptions, resumes)
 DATA_TTL_HOURS = config('DATA_TTL_HOURS', default=24, cast=int)
 
-# AI Agent configuration
-AI_AGENT_URL = config('AI_AGENT_URL', default='http://localhost:8001')
-AI_AGENT_TIMEOUT = config('AI_AGENT_TIMEOUT', default=300, cast=int)  # NIM latency + agent post-processing
+# NVIDIA NIM (in-process resume customization)
+NVIDIA_API_KEY = config('NVIDIA_API_KEY', default='')
+NVIDIA_MODEL = config('NVIDIA_MODEL', default='nvidia/nemotron-3-super-120b-a12b')
+NVIDIA_API_BASE_URL = config(
+    'NVIDIA_API_BASE_URL',
+    default='https://integrate.api.nvidia.com/v1',
+)
+NVIDIA_REQUEST_TIMEOUT = config('NVIDIA_REQUEST_TIMEOUT', default=180, cast=int)
 
-# LaTeX microservice configuration
-LATEX_SERVICE_URL = config('LATEX_SERVICE_URL', default='http://localhost:8002')
-LATEX_SERVICE_TIMEOUT = config('LATEX_SERVICE_TIMEOUT', default=30, cast=int)
-
-# FormaTeX cloud compilation (optional — falls back to LaTeX microservice when unset)
+# FormaTeX cloud PDF compilation (required for resume PDF generation)
 FORMATEX_API_KEY = config('FORMATEX_API_KEY', default='')
 FORMATEX_API_BASE_URL = config(
     'FORMATEX_API_BASE_URL',
@@ -262,10 +276,9 @@ FORMATEX_API_BASE_URL = config(
 FORMATEX_ENGINE = config('FORMATEX_ENGINE', default='auto')
 FORMATEX_TIMEOUT = config('FORMATEX_TIMEOUT', default=120, cast=int)
 FORMATEX_USE_SMART_COMPILE = config('FORMATEX_USE_SMART_COMPILE', default=True, cast=bool)
-FORMATEX_FALLBACK_TO_LOCAL = config('FORMATEX_FALLBACK_TO_LOCAL', default=True, cast=bool)
 
-# Resume templates directory
-TEMPLATES_DIR = BASE_DIR / 'templates' / 'resumes'
+# LaTeX resume templates (filesystem)
+LATEX_TEMPLATES_DIR = BASE_DIR / 'app' / 'latex' / 'templates'
 
 # Generated PDFs temporary storage
 GENERATED_PDF_DIR = BASE_DIR / 'generated' / 'pdfs'

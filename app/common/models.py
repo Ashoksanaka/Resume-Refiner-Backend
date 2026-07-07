@@ -79,9 +79,8 @@ class TemporaryResource(TimeStampedModel):
 class Template(models.Model):
     """
     Resume template metadata.
-    
-    Templates are managed by the LaTeX microservice and synced to this database.
-    The LaTeX service is the source of truth for templates.
+
+    Templates live on the filesystem (app/latex/templates/) and are synced to this database.
     """
     
     id = models.CharField(
@@ -137,10 +136,10 @@ class Template(models.Model):
     
     @property
     def preview_png_url(self) -> str:
-        """URL for PNG preview (served by backend, proxied from LaTeX service)."""
+        """URL for PNG preview (served by backend)."""
         return f"/api/v1/templates/{self.id}/preview.png"
     
     @property
     def preview_pdf_url(self) -> str:
-        """URL for PDF preview (served by backend, proxied from LaTeX service)."""
+        """URL for PDF preview (served by backend)."""
         return f"/api/v1/templates/{self.id}/preview.pdf"

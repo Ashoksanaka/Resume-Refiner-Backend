@@ -636,7 +636,7 @@ class LaTeXValidator:
             'resumeItemListStart', 'resumeItemListEnd', 'resumesection',  # Common template command
             'myuline', 'texteb', 'ebseries',  # From main template
             'FullName', 'Email', 'Phone', 'Address', 'LinkedIn', 'GitHub', 'Website', 'ProfilePhoto',  # Legacy ATS placeholders
-            # Current ATS template macros (services/latex/templates/main/resume_template.tex)
+            # Current ATS template macros (app/latex/templates/main/resume_template.tex)
             'resumeHeader', 'resumeContactLine',             'resumeSectionTitle', 'resumeSummaryText',
             'resumeExperienceHeading', 'resumeEducationEntry', 'resumeProjectEntry',
             'resumeSkillLine', 'resumeDetailLine', 'resumeEntryHeading', 'resumeTagList',

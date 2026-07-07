@@ -66,7 +66,7 @@ class ResumeGenerationRequest(TemporaryResource):
     - MODEL_OUTPUT_INVALID: AI produced hallucinated or invalid content
     - LATEX_COMPILE_ERROR: LaTeX failed to compile to PDF
     - AI_SERVICE_ERROR: AI agent service error
-    - LATEX_SERVICE_ERROR: LaTeX microservice error
+    - LATEX_SERVICE_ERROR: LaTeX compile or template service error
     - TIMEOUT: Generation exceeded time limit
     """
     

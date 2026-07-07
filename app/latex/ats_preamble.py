@@ -32,18 +32,10 @@ _MACROS_INPUT_RE = re.compile(r"\\input\{resume_macros\.tex\}")
 
 def _resolve_macros_tex_path() -> Path:
     """Locate resume_macros.tex (single source of truth for layout/spacing)."""
-    here = Path(__file__).resolve()
-    candidates = (
-        here.parent / "templates" / "main" / "resume_macros.tex",
-        here.parent.parent.parent / "services" / "latex" / "templates" / "main" / "resume_macros.tex",
-    )
-    for path in candidates:
-        if path.is_file():
-            return path
-    raise FileNotFoundError(
-        "resume_macros.tex not found; checked: "
-        + ", ".join(str(p) for p in candidates)
-    )
+    path = Path(__file__).resolve().parent / "templates" / "main" / "resume_macros.tex"
+    if path.is_file():
+        return path
+    raise FileNotFoundError(f"resume_macros.tex not found at {path}")
 
 
 @lru_cache(maxsize=1)

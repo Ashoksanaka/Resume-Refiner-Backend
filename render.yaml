@@ -1,0 +1,105 @@
+# Render Blueprint — deploy all three services from the Render dashboard:
+#   New → Blueprint → connect this repo → apply
+#
+# Prerequisites (set in env var group or Render dashboard):
+#   Supabase Postgres, Redis Cloud, NVIDIA, FormaTeX, Clerk keys
+#
+# Note: Background workers require a paid plan (Starter). Free tier = web only.
+
+envVarGroups:
+  - name: resume-refiner-env
+    envVars:
+      - key: DEBUG
+        value: "False"
+      - key: ALLOWED_HOSTS
+        value: localhost,127.0.0.1,.onrender.com
+      - key: SESSION_COOKIE_SECURE
+        value: "True"
+      - key: SESSION_COOKIE_SAMESITE
+        value: Lax
+      - key: POSTGRES_PORT
+        value: "5432"
+      - key: POSTGRES_SSLMODE
+        value: require
+      - key: CELERY_TASK_TIME_LIMIT
+        value: "420"
+      - key: NVIDIA_MODEL
+        value: nvidia/nemotron-3-super-120b-a12b
+      - key: NVIDIA_API_BASE_URL
+        value: https://integrate.api.nvidia.com/v1
+      - key: NVIDIA_REQUEST_TIMEOUT
+        value: "180"
+      - key: FORMATEX_API_BASE_URL
+        value: https://api.formatex.io/api/v1
+      - key: FORMATEX_ENGINE
+        value: auto
+      - key: FORMATEX_TIMEOUT
+        value: "120"
+      - key: FORMATEX_USE_SMART_COMPILE
+        value: "True"
+      - key: DATA_TTL_HOURS
+        value: "24"
+      - key: CLERK_JWKS_CACHE_TTL
+        value: "3600"
+      # --- Set these in the Render dashboard (Environment) ---
+      - key: SECRET_KEY
+        sync: false
+      - key: POSTGRES_HOST
+        sync: false
+      - key: POSTGRES_DB
+        sync: false
+      - key: POSTGRES_USER
+        sync: false
+      - key: POSTGRES_PASSWORD
+        sync: false
+      - key: CELERY_BROKER_URL
+        sync: false
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: FORMATEX_API_KEY
+        sync: false
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: CLERK_JWT_ISSUER
+        sync: false
+      - key: CLERK_WEBHOOK_SECRET
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: CSRF_TRUSTED_ORIGINS
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+
+services:
+  - type: web
+    name: resume-refiner-api
+    runtime: docker
+    region: singapore
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    healthCheckPath: /api/v1/health
+    preDeployCommand: python manage.py migrate --noinput
+    envVars:
+      - fromGroup: resume-refiner-env
+
+  - type: worker
+    name: resume-refiner-worker
+    runtime: docker
+    region: singapore
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerCommand: celery -A config worker -l info -Q celery,resume_generation,maintenance
+    envVars:
+      - fromGroup: resume-refiner-env
+
+  - type: worker
+    name: resume-refiner-beat
+    runtime: docker
+    region: singapore
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerCommand: celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    envVars:
+      - fromGroup: resume-refiner-env

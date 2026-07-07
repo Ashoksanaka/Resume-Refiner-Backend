@@ -25,6 +25,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project
 COPY --chown=django:django . .
 
+# Web start script (uses $PORT for Render/Railway)
+RUN chmod +x /app/scripts/start-web.sh
+
 # Create directories for generated content and set permissions
 RUN mkdir -p /app/generated/pdfs /app/templates/resumes && \
     chown -R django:django /app
@@ -32,8 +35,8 @@ RUN mkdir -p /app/generated/pdfs /app/templates/resumes && \
 # Switch to non-root user
 USER django
 
-# Expose port
+# Expose port (Render sets PORT at runtime; 8000 is local default)
 EXPOSE 8000
 
-# Default command
-CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000"]
+# Default: web server (workers override start command on Render)
+CMD ["/app/scripts/start-web.sh"]

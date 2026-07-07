@@ -420,23 +420,16 @@ class TestTemplateBasedGeneration:
 
     @pytest.mark.asyncio
     async def test_ai_agent_client_payload_includes_template_and_sections(self):
-        from unittest.mock import AsyncMock, patch, MagicMock
+        from unittest.mock import AsyncMock, patch
         from app.common.clients.ai_agent import AIAgentClient
 
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
+        mock_generate = AsyncMock(return_value={
             'latex_source': r'\documentclass{article}\begin{document}x\end{document}',
             'modifications': ['test'],
-        }
-
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
+        })
 
         client = AIAgentClient()
-        with patch('httpx.AsyncClient', return_value=mock_client):
+        with patch('app.ai.nim_service.generate_resume', mock_generate):
             await client.generate_resume(
                 profile_data={'personalInfo': {'full_name': 'Jane Doe'}, 'experience': []},
                 job_description_text='Python role',
@@ -445,13 +438,12 @@ class TestTemplateBasedGeneration:
                 selected_sections=['experience'],
             )
 
-        call_kwargs = mock_client.post.call_args
-        payload = call_kwargs.kwargs['json']
-        assert payload['template'] == '\\documentclass{article}'
-        assert payload['template_id'] == 'main'
-        assert payload['selected_sections'] == ['experience']
-        assert 'profile' in payload
-        assert payload['job_description'] == 'Python role'
+        call_kwargs = mock_generate.call_args.kwargs
+        assert call_kwargs['template'] == '\\documentclass{article}'
+        assert call_kwargs['template_id'] == 'main'
+        assert call_kwargs['selected_sections'] == ['experience']
+        assert 'profile' in call_kwargs
+        assert call_kwargs['job_description'] == 'Python role'
 
 
 @pytest.mark.django_db

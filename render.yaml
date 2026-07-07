@@ -1,10 +1,17 @@
-# Render Blueprint — deploy all three services from the Render dashboard:
-#   New → Blueprint → connect this repo → apply
+# Render Blueprint — FREE TIER (all processes in one web service)
 #
-# Prerequisites (set in env var group or Render dashboard):
-#   Supabase Postgres, Redis Cloud, NVIDIA, FormaTeX, Clerk keys
+# Deploy: Render Dashboard → New → Blueprint → connect this repo
 #
-# Note: Background workers require a paid plan (Starter). Free tier = web only.
+# Render does not offer free "background worker" service types. To run Celery on
+# free tier, API + celery worker + celery beat all run inside resume-refiner-api
+# via scripts/start-render-free.sh.
+#
+# Free tier limits:
+#   - ~512MB RAM (concurrency=1, single gunicorn worker)
+#   - Spins down after ~15 min idle (~30s cold start)
+#   - Ephemeral disk (download PDFs promptly)
+#
+# Prerequisites: Supabase, Redis Cloud, NVIDIA, FormaTeX, Clerk keys below.
 
 envVarGroups:
   - name: resume-refiner-env
@@ -72,34 +79,22 @@ envVarGroups:
         sync: false
 
 services:
+  # === Web (Django API) — free ===
   - type: web
     name: resume-refiner-api
     runtime: docker
     region: singapore
-    plan: starter
+    plan: free
     dockerfilePath: ./Dockerfile
-    dockerCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    dockerCommand: /app/scripts/start-render-free.sh
     healthCheckPath: /api/v1/health
     preDeployCommand: python manage.py migrate --noinput
     envVars:
       - fromGroup: resume-refiner-env
 
-  - type: worker
-    name: resume-refiner-worker
-    runtime: docker
-    region: singapore
-    plan: starter
-    dockerfilePath: ./Dockerfile
-    dockerCommand: celery -A config worker -l info -Q celery,resume_generation,maintenance
-    envVars:
-      - fromGroup: resume-refiner-env
+  # === Celery worker — logical service, runs inside resume-refiner-api (free) ===
+  # Render has no free worker service type; start-render-free.sh starts the worker.
+  # No separate Render service is created for this block.
 
-  - type: worker
-    name: resume-refiner-beat
-    runtime: docker
-    region: singapore
-    plan: starter
-    dockerfilePath: ./Dockerfile
-    dockerCommand: celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
-    envVars:
-      - fromGroup: resume-refiner-env
+  # === Celery beat — logical service, runs inside resume-refiner-api (free) ===
+  # Same as above; beat is started by start-render-free.sh.

@@ -139,17 +139,16 @@ CLERK_WEBHOOK_SECRET=whsec_...
 
 ## Render Deployment
 
-Deploy **three services** from this repo using the included [`render.yaml`](render.yaml) blueprint.
+Deploy the backend from this repo using [`render.yaml`](render.yaml) (free tier).
+
+> **Free tier:** Render has no free background-worker service type. The blueprint deploys **one free web service** that runs Django API + Celery worker + Celery beat together via `scripts/start-render-free.sh`. Local `docker compose` still uses separate containers.
 
 ### 1. Create services (Blueprint)
 
 1. Push this repo to GitHub.
 2. In [Render Dashboard](https://dashboard.render.com/) → **New** → **Blueprint**.
 3. Connect the `Resume-Refiner-Backend` repository and apply the blueprint.
-4. Render creates:
-   - `resume-refiner-api` (Web Service)
-   - `resume-refiner-worker` (Background Worker)
-   - `resume-refiner-beat` (Background Worker)
+4. Render creates `resume-refiner-api` (Web Service, free tier).
 
 ### 2. Set environment variables
 
@@ -179,9 +178,15 @@ Copy values from your local `.env` — do not commit `.env` to git.
 - Health check: `GET /api/v1/health`
 - Note your web URL: `https://resume-refiner-api.onrender.com` (name may vary).
 
-### 4. Pricing note
+### 4. Free tier (all-in-one)
 
-Background workers require a **paid Starter plan** ($7/mo per service). Budget for 3 services (web + worker + beat). The free tier only supports the web service and spins down when idle — resume generation will not work without workers.
+| Component | How it runs on free Render |
+|-----------|----------------------------|
+| Django API | `resume-refiner-api` web service |
+| Celery worker | Same container (`start-render-free.sh`) |
+| Celery beat | Same container (`start-render-free.sh`) |
+
+Limits: ~512MB RAM, idle spin-down, ephemeral PDF disk. For production scale, split into paid worker services.
 
 ### 5. Manual deploy (without Blueprint)
 
@@ -235,10 +240,11 @@ backend/
 │   ├── profiles/           # User profile management
 │   └── resumes/            # Resume generation & management
 ├── config/                 # Django project settings
-├── render.yaml             # Render Blueprint (web + worker + beat)
+├── render.yaml             # Render Blueprint (free web service)
 ├── Procfile                # Process types (Render / Railway)
 ├── railway.toml            # Railway deploy config (alternative)
-├── scripts/start-web.sh    # Gunicorn entrypoint ($PORT-aware)
+├── scripts/start-render-free.sh  # API + Celery worker + beat (Render free)
+├── scripts/start-web.sh          # Gunicorn only (local Docker web)
 ├── Dockerfile
 ├── docker-compose.yml      # Local dev (backend + celery only)
 └── requirements.txt

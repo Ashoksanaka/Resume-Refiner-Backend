@@ -25,8 +25,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project
 COPY --chown=django:django . .
 
-# Web start script (uses $PORT for Render/Railway)
-RUN chmod +x /app/scripts/start-web.sh
+# Web start scripts (uses $PORT for Render/Railway)
+RUN chmod +x /app/scripts/start-web.sh /app/scripts/start-render-free.sh
 
 # Create directories for generated content and set permissions
 RUN mkdir -p /app/generated/pdfs /app/templates/resumes && \

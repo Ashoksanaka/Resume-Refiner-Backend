@@ -26,6 +26,7 @@ MANIFEST
 venv/
 ENV/
 env/
+!.env.example
 .python-version
 pip-log.txt
 pip-delete-this-directory.txt
@@ -96,10 +97,10 @@ media/
 # Docker (optional local overrides)
 docker-compose.override.yml
 
-# Environment secrets
+# Environment secrets (use .env.example as template)
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # Celery
 celerybeat-schedule

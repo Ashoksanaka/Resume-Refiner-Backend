@@ -7,6 +7,7 @@ EmailBackend is retained for Django admin superuser login only.
 import logging
 
 from django.contrib.auth.backends import ModelBackend
+from django.contrib.auth.hashers import make_password
 
 from app.authentication.models import User
 
@@ -29,7 +30,8 @@ class EmailBackend(ModelBackend):
             email = username.lower()
             user = User.objects.get(email=email)
         except User.DoesNotExist:
-            User().set_password(password)
+            # Hash work comparable to a real check_password, without setting a user password.
+            make_password(password)
             return None
 
         if user.check_password(password) and self.user_can_authenticate(user):

@@ -14,7 +14,7 @@ from app.profiles.models import Profile
 from app.resumes.models import JobDescription, ResumeGenerationRequest
 from app.common.models import Template
 from app.common.tasks import cleanup_expired_resources
-from app.authentication.tasks import cleanup_expired_tokens, cleanup_expired_idempotency_keys
+from app.authentication.tasks import cleanup_expired_idempotency_keys
 
 
 @pytest.fixture
@@ -44,8 +44,11 @@ def template(db):
     return Template.objects.create(
         id='test-template',
         name='Test Template',
-        latex_file='test.tex',
-        is_active=True
+        description='Test template',
+        author='Resume AI',
+        version='1.0.0',
+        default_filename='resume',
+        is_active=True,
     )
 
 
@@ -116,11 +119,6 @@ class TestTTLCleanup:
         # Verify valid request still exists
         assert ResumeGenerationRequest.objects.filter(id=valid_request.id).exists()
         assert result['resume_requests_deleted'] == 1
-    
-    def test_cleanup_expired_tokens_noop(self, verified_user):
-        """Legacy token cleanup task is a no-op after Clerk migration."""
-        result = cleanup_expired_tokens()
-        assert result['skipped'] is True
     
     def test_cleanup_expired_idempotency_keys(self, verified_user):
         """Test that expired idempotency keys are deleted."""

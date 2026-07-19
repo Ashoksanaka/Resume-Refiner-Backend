@@ -8,6 +8,7 @@ as required by the API specification.
 import uuid
 from django.db import models
 from django.contrib.auth.models import AbstractUser, BaseUserManager
+from django.contrib.auth.password_validation import validate_password
 from django.utils import timezone
 
 
@@ -28,7 +29,11 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault('is_verified', False)
         
         user = self.model(email=email, **extra_fields)
-        user.set_password(password)
+        if password is not None:
+            validate_password(password, user)
+            user.set_password(password)
+        else:
+            user.set_unusable_password()
         user.save(using=self._db)
         return user
     

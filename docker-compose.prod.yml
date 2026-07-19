@@ -1,0 +1,150 @@
+# Production stack for a single AWS VM.
+# Postgres (Supabase) and Redis (Redis Cloud) remain external.
+#
+# Usage on the VM (CI/CD pulls a prebuilt image from GHCR):
+#   cp .env.example .env   # fill production values
+#   BACKEND_IMAGE=ghcr.io/<owner>/<repo>:<tag> docker compose -f docker-compose.prod.yml pull
+#   BACKEND_IMAGE=ghcr.io/<owner>/<repo>:<tag> docker compose -f docker-compose.prod.yml up -d
+#
+# Local build fallback (no BACKEND_IMAGE set): docker compose -f docker-compose.prod.yml up -d --build
+#
+# Only Nginx publishes port 80. Gunicorn stays on the internal network.
+
+# Shared image reference: pulled from registry in CI/CD, built locally otherwise.
+x-backend-image: &backend-image ${BACKEND_IMAGE:-resume-refiner-backend:local}
+
+services:
+  migrate:
+    image: *backend-image
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: resumeai-migrate
+    user: "0:0"
+    command: ["/app/scripts/start-migrate.sh"]
+    env_file: .env
+    volumes:
+      - static_files:/app/staticfiles
+    restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  web:
+    image: *backend-image
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: resumeai-web
+    user: "0:0"
+    command: ["/app/scripts/start-web.sh"]
+    env_file: .env
+    environment:
+      PORT: "8000"
+    volumes:
+      - generated_pdfs:/app/generated/pdfs
+      - media_files:/app/media
+      - static_files:/app/staticfiles:ro
+    expose:
+      - "8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  celery_worker:
+    image: *backend-image
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: resumeai-celery-worker
+    user: "0:0"
+    command: >
+      celery -A config worker -l info
+      -Q celery,resume_generation,maintenance
+      --concurrency=2
+    env_file: .env
+    volumes:
+      - generated_pdfs:/app/generated/pdfs
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A config inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  celery_beat:
+    image: *backend-image
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: resumeai-celery-beat
+    command: >
+      celery -A config beat -l info
+      --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    env_file: .env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: resumeai-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+      - static_files:/staticfiles:ro
+      - media_files:/media:ro
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  generated_pdfs:
+  media_files:
+  static_files:

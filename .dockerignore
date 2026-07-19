@@ -3,7 +3,11 @@
 .env.*
 !.env.example
 .venv/
+.venv-verify/
+.semgrep-venv/
 venv/
+env/
+ENV/
 
 # Git and IDE
 .git/
@@ -18,17 +22,30 @@ __pycache__/
 htmlcov/
 .coverage
 .tox/
+pytest.ini
+conftest.py
+**/test_*.py
+**/tests.py
+**/tests/
 
 # Generated / local artifacts
 generated/
 staticfiles/
+media/
+profiles/
 *.pdf
 celerybeat-schedule
 celerybeat.pid
 
-# Docs and dev-only
+# Security scan / reports
+semgrep.json
+semgrep*.json
+*.sarif
+reports/
+
+# Docs and compose (prod compose is host-only)
 *.md
 !README.md
 docker-compose.yml
 docker-compose.override.yml
-railway.toml
+docker-compose.prod.yml

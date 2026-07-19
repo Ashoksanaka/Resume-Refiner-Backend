@@ -1,7 +1,8 @@
-version: '3.8'
-
 # Local dev only — Postgres (Supabase) and Redis (Redis Cloud) are external.
 # Copy .env.example to .env and set cloud connection strings before starting.
+#
+# First ensure the shared network exists (either stack can create it):
+#   ./scripts/ensure-shared-network.sh
 
 services:
   # =============================================================================
@@ -12,9 +13,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: resumeai-backend
-    command: >
-      sh -c "python manage.py migrate &&
-             python manage.py runserver 0.0.0.0:8000"
+    user: "0:0"
+    command: ["/app/scripts/start-dev.sh"]
     volumes:
       - .:/app
       - generated_pdfs:/app/generated/pdfs
@@ -23,16 +23,19 @@ services:
     env_file: .env
     environment:
       FORMATEX_API_KEY: ${FORMATEX_API_KEY:-}
-      FORMATEX_API_BASE_URL: ${FORMATEX_API_BASE_URL:-https://api.formatex.io/api/v1}
+      FORMATEX_API_BASE_URL: ${FORMATEX_API_BASE_URL:-}
       FORMATEX_ENGINE: ${FORMATEX_ENGINE:-auto}
       FORMATEX_TIMEOUT: ${FORMATEX_TIMEOUT:-120}
       FORMATEX_USE_SMART_COMPILE: ${FORMATEX_USE_SMART_COMPILE:-True}
+    networks:
+      - resume_refiner
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/admin/login/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 45s
+    restart: unless-stopped
 
   # =============================================================================
   # Celery Worker
@@ -42,6 +45,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: resumeai-celery-worker
+    user: "0:0"
     command: celery -A config worker -l info -Q celery,resume_generation,maintenance
     volumes:
       - .:/app
@@ -49,12 +53,16 @@ services:
     env_file: .env
     environment:
       FORMATEX_API_KEY: ${FORMATEX_API_KEY:-}
-      FORMATEX_API_BASE_URL: ${FORMATEX_API_BASE_URL:-https://api.formatex.io/api/v1}
+      FORMATEX_API_BASE_URL: ${FORMATEX_API_BASE_URL:-}
       FORMATEX_ENGINE: ${FORMATEX_ENGINE:-auto}
       FORMATEX_TIMEOUT: ${FORMATEX_TIMEOUT:-120}
       FORMATEX_USE_SMART_COMPILE: ${FORMATEX_USE_SMART_COMPILE:-True}
+    networks:
+      - resume_refiner
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
 
   # =============================================================================
   # Celery Beat (Scheduler)
@@ -68,8 +76,18 @@ services:
     volumes:
       - .:/app
     env_file: .env
+    networks:
+      - resume_refiner
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   generated_pdfs:
+
+# Shared with Resume-Refiner-frontend. Create once via ./scripts/ensure-shared-network.sh
+networks:
+  resume_refiner:
+    name: resume-refiner-net
+    external: true

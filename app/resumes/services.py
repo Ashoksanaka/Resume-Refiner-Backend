@@ -19,6 +19,8 @@ from app.common.models import Template
 from app.authentication.models import User, IdempotencyKey
 from app.profiles.services import ProfileService
 from app.common.exceptions import (
+    ConflictException,
+    InvalidPayloadException,
     ResourceNotFoundException,
     TTLExpiredException,
     ModelOutputInvalidException,
@@ -658,7 +660,7 @@ class ResumeGenerationService:
         job_description_id: str,
         template_id: str,
         sections: list[str],
-        idempotency_key: Optional[str] = None
+        idempotency_key: Optional[str] = None,
     ) -> ResumeGenerationRequest:
         """
         Create a new resume generation request.
@@ -753,7 +755,6 @@ class ResumeGenerationService:
         Cancel an in-progress resume generation request.
         """
         from celery import current_app
-        from app.common.exceptions import ConflictException
 
         generation_request = ResumeGenerationService.get_generation_request(user, generation_id)
 

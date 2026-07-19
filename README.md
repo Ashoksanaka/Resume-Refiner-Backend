@@ -16,22 +16,26 @@ Django REST API backend for the Resume Refiner platform. Provides authentication
 
 | Component | Host |
 |-----------|------|
-| Next.js frontend | Vercel |
-| Django API + Celery worker + Celery beat | Render (or Railway) |
+| Next.js frontend | Vercel (HTTPS) |
+| Django API + Celery worker + Celery beat + Nginx | AWS VM (Docker Compose) |
 | PostgreSQL | Supabase |
 | Redis (Celery broker) | Redis Cloud |
 | NVIDIA NIM | Direct API calls from Celery worker |
 
 ```mermaid
 flowchart LR
-  vercel[Vercel frontend] -->|"/api/v1 rewrite"| render[Render Django API]
-  render --> supabase[(Supabase Postgres)]
+  browser[Browser] -->|"HTTPS /api/v1"| vercel[Vercel frontend]
+  vercel -->|"HTTP BACKEND_URL"| nginx[AWS Nginx]
+  nginx --> web[Django Gunicorn]
+  web --> supabase[(Supabase Postgres)]
   worker[Celery worker] --> supabase
   worker --> redis[(Redis Cloud)]
   worker --> nvidia[NVIDIA NIM API]
   worker --> formatex[FormaTeX API]
-  clerk[Clerk] -->|webhooks| render
+  clerk[Clerk] -->|"webhooks via Vercel proxy"| vercel
 ```
+
+Browser traffic stays on HTTPS via the Vercel same-origin proxy. While the AWS VM serves HTTP only, set Vercel `ALLOW_INSECURE_BACKEND=true`. That Vercel → VM hop is unencrypted until TLS is added on the VM.
 
 ## Prerequisites
 
@@ -53,12 +57,17 @@ Docker Compose runs only the Django app and Celery processes. Postgres and Redis
    # Set Supabase, Redis Cloud, NVIDIA, FormaTeX, and Clerk credentials
    ```
 
-2. **Start services**:
+2. **Create the shared Docker network** (required once per machine):
+   ```bash
+   ./scripts/ensure-shared-network.sh
+   ```
+
+3. **Start services**:
    ```bash
    docker compose up -d
    ```
 
-3. **Run migrations** (if not auto-run on backend start):
+4. **Run migrations** (if not auto-run on backend start):
    ```bash
    docker compose exec backend python manage.py migrate
    ```
@@ -69,7 +78,10 @@ The API will be available at `http://localhost:8000`
 
 1. **Install dependencies**:
    ```bash
+   # Runtime only
    pip install -r requirements.txt
+   # Or runtime + tests
+   pip install -r requirements-dev.txt
    ```
 
 2. **Set up environment variables** (see Environment Variables section)
@@ -104,16 +116,13 @@ Create a `.env` file in the backend directory. See `.env.example` for the full l
 # Django
 SECRET_KEY=your-secret-key-here
 DEBUG=False
-ALLOWED_HOSTS=localhost,127.0.0.1,.onrender.com,resume-refiner-api-vulk.onrender.com
-CORS_ALLOWED_ORIGINS=http://localhost:3000,https://your-app.vercel.app
-CSRF_TRUSTED_ORIGINS=http://localhost:3000,https://your-app.vercel.app
+ALLOWED_HOSTS=backend,localhost,127.0.0.1
+CORS_ALLOWED_ORIGINS=https://your-app.vercel.app
+CSRF_TRUSTED_ORIGINS=https://your-app.vercel.app
+FRONTEND_URL=https://your-app.vercel.app
 
 # Supabase Postgres (Session mode, port 5432)
-POSTGRES_HOST=db.xxxxx.supabase.co
-POSTGRES_PORT=5432
-POSTGRES_DB=postgres
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=your_supabase_password
+DIRECT_URL=postgresql://postgres.xxxxx:PASSWORD@aws-1-ap-south-1.pooler.supabase.com:5432/postgres
 POSTGRES_SSLMODE=require
 
 # Redis Cloud (TLS)
@@ -122,11 +131,15 @@ CELERY_BROKER_URL=rediss://default:password@redis-xxxxx.cloud.redislabs.com:6379
 # NVIDIA NIM
 NVIDIA_API_KEY=your-nvidia-nim-api-key
 NVIDIA_MODEL=nvidia/nemotron-3-super-120b-a12b
-NVIDIA_API_BASE_URL=https://integrate.api.nvidia.com/v1
+NVIDIA_API_BASE_URL=   # required — NVIDIA OpenAI-compatible base URL
 NVIDIA_REQUEST_TIMEOUT=180
 
 # FormaTeX (required for PDF generation)
 FORMATEX_API_KEY=your-formatex-api-key
+FORMATEX_API_BASE_URL=   # required — FormaTeX API base URL
+
+# Clerk Backend API base (required in production)
+CLERK_API_BASE_URL=
 ```
 
 ### Clerk
@@ -137,111 +150,190 @@ CLERK_JWT_ISSUER=https://your-app.clerk.accounts.dev
 CLERK_WEBHOOK_SECRET=whsec_...
 ```
 
-## Render Deployment
+## AWS VM Deployment (Docker Compose)
 
-Deploy the backend from this repo using [`render.yaml`](render.yaml) (free tier).
+Production stack: **Nginx + Gunicorn + Celery worker + Celery beat** via [`docker-compose.prod.yml`](docker-compose.prod.yml). Postgres (Supabase) and Redis (Redis Cloud) stay external.
 
-> **Free tier:** Render has no free background-worker service type. The blueprint deploys **one free web service** that runs Django API + Celery worker + Celery beat together via `scripts/start-render-free.sh`. Local `docker compose` still uses separate containers.
+### 1. VM prerequisites
 
-### 1. Create services (Blueprint)
+1. Launch an EC2 (or equivalent) instance and attach an **Elastic IP**.
+2. Security group:
+   - **Inbound 80/tcp** from `0.0.0.0/0` (Vercel / internet)
+   - **Inbound 22/tcp** from your admin IP only
+   - Do **not** expose Gunicorn `8000` publicly
+3. Install Docker Engine + Compose plugin on the VM.
+4. Clone this repository onto the VM.
 
-1. Push this repo to GitHub.
-2. In [Render Dashboard](https://dashboard.render.com/) → **New** → **Blueprint**.
-3. Connect the `Resume-Refiner-Backend` repository and apply the blueprint.
-4. Render creates `resume-refiner-api` (Web Service, free tier).
-
-### 2. Set environment variables
-
-**This is the most common deploy failure:** if `POSTGRES_*` / `DIRECT_URL` are missing, Django falls back to `localhost` and migrate crashes.
-
-In Render → **Environment** → group **`resume-refiner-env`**, copy every variable from your local `.env` (see [`render.env.example`](render.env.example)).
-
-**Fastest fix:** set `DIRECT_URL` to your Supabase **session mode** URL (port `5432`):
+### 2. Environment file
 
 ```bash
-DIRECT_URL=postgresql://postgres.xxxxx:YOUR_PASSWORD@aws-1-ap-south-1.pooler.supabase.com:5432/postgres
+cp .env.example .env
+# Fill secrets — never commit .env
 ```
 
-Also required:
-| Variable | Source |
-|----------|--------|
-| `DIRECT_URL` | Supabase session pooler URL (port `5432`) — **or** all `POSTGRES_*` |
-| `SECRET_KEY` | Django secret |
+Critical production values:
+
+| Variable | Value |
+|----------|-------|
+| `DEBUG` | `False` |
+| `ALLOWED_HOSTS` | `backend,localhost,127.0.0.1` (Nginx sets `Host: backend`) |
+| `DIRECT_URL` or `POSTGRES_*` | Supabase session mode (port `5432`) |
 | `CELERY_BROKER_URL` | Redis Cloud `rediss://` URL |
-| `NVIDIA_API_KEY` | NVIDIA NIM dashboard |
-| `FORMATEX_API_KEY` | FormaTeX dashboard |
-| `CLERK_SECRET_KEY` | Clerk dashboard |
-| `CLERK_JWT_ISSUER` | Clerk dashboard |
-| `CLERK_WEBHOOK_SECRET` | Clerk webhook signing secret |
-| `CORS_ALLOWED_ORIGINS` | `https://your-app.vercel.app` (+ localhost for dev) |
-| `CSRF_TRUSTED_ORIGINS` | Same as CORS |
-| `FRONTEND_URL` | `https://your-app.vercel.app` |
+| `CORS_ALLOWED_ORIGINS` / `CSRF_TRUSTED_ORIGINS` / `FRONTEND_URL` | `https://your-app.vercel.app` |
+| `CLERK_*`, `NVIDIA_API_KEY`, `FORMATEX_API_KEY`, `SECRET_KEY` | From respective dashboards |
 
-Copy values from your local `.env` — do not commit `.env` to git.
+### 3. Start the stack
 
-### 3. Migrations & health check
-
-- Migrations and template sync run at container start via `scripts/start-render-free.sh` (free tier does not support `preDeployCommand`).
-- Live API: `https://resume-refiner-api-vulk.onrender.com`
-- Health check: `GET /api/v1/health`
-
-### 4. Free tier (all-in-one)
-
-| Component | How it runs on free Render |
-|-----------|----------------------------|
-| Django API | `resume-refiner-api` web service |
-| Celery worker | Same container (`start-render-free.sh`) |
-| Celery beat | Same container (`start-render-free.sh`) |
-
-Limits: ~512MB RAM, idle spin-down, ephemeral PDF disk. First request after deploy may be slow (migrate + template sync + cold start).
-
-### 5. Post-deploy checklist
-
-1. Copy all secrets from `.env` into Render **Environment** (group `resume-refiner-env`).
-2. Update `ALLOWED_HOSTS` with your exact `*.onrender.com` hostname.
-3. Set Vercel `BACKEND_URL=https://<your-service>.onrender.com`.
-4. Point Clerk webhook to `https://<your-service>.onrender.com/api/v1/auth/clerk/webhook`.
-5. Verify: `curl https://<your-service>.onrender.com/api/v1/health`
-
-**Note:** Generated PDFs are stored on the local filesystem (`generated/pdfs/`). Render's disk is ephemeral — users should download PDFs promptly.
-
-### 6. Manual deploy (paid tier, optional)
-
-Split into separate web + worker + beat services and use:
-
-| Service | Start command |
-|---------|---------------|
-| **Web** | `gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120` |
-| **Worker** | `celery -A config worker -l info -Q celery,resume_generation,maintenance` |
-| **Beat** | `celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler` |
-
-Paid web services support `preDeployCommand: python manage.py migrate --noinput`.
-
-## Railway Deployment (alternative)
-
-Same 3-service pattern as Render. See [`Procfile`](Procfile) and [`railway.toml`](railway.toml).
-
-| Service | Start command |
-|---------|---------------|
-| **web** | `gunicorn config.wsgi:application --bind 0.0.0.0:$PORT` |
-| **worker** | `celery -A config worker -l info -Q celery,resume_generation,maintenance` |
-| **beat** | `celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler` |
-
-## Vercel Frontend Configuration
-
-In the Resume-Refiner-frontend Vercel project:
+The CI/CD pipeline deploys a prebuilt image from GHCR (see [CI/CD](#cicd-github-actions)).
+To start it manually on the VM with a prebuilt image:
 
 ```bash
-BACKEND_URL=https://resume-refiner-api-vulk.onrender.com
+export BACKEND_IMAGE=ghcr.io/ashoksanaka/resume-refiner-backend:latest
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
 ```
 
-Update Clerk webhook endpoint to:
+Local build fallback (no registry image):
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+What runs:
+
+| Service | Role |
+|---------|------|
+| `migrate` | One-shot: `migrate`, `sync_templates`, `collectstatic` |
+| `web` | Gunicorn (`scripts/start-web.sh`), internal port 8000 |
+| `celery_worker` | Resume generation + maintenance queues |
+| `celery_beat` | Periodic tasks (single instance only) |
+| `nginx` | Public port 80 → proxies `/api/` and `/admin/`, serves `/static/` and `/media/` |
+
+Migrations run once per deploy in the `migrate` service before web/worker start.
+
+Profile pictures and other uploads are stored under `/app/media` on the named `media_files` volume and served by Nginx at `/media/`.
+
+
+### 4. Vercel frontend configuration
+
+In the Resume-Refiner-frontend Vercel project (server-only vars):
+
+```bash
+BACKEND_URL=http://<AWS_ELASTIC_IP>
+ALLOW_INSECURE_BACKEND=true
+NEXT_PUBLIC_API_URL=/api/v1
+```
+
+Keep the browser on same-origin `/api/v1` so HTTPS pages never call the HTTP VM directly (mixed-content safe). Redeploy the frontend after setting these.
+
+When you add TLS on the VM (or an ALB), switch to:
+
+```bash
+BACKEND_URL=https://api.yourdomain.com
+# remove ALLOW_INSECURE_BACKEND
+```
+
+### 5. Clerk webhook
+
+Point Clerk at the **Vercel HTTPS proxy**, not the raw Elastic IP:
 
 ```
-https://resume-refiner-api-vulk.onrender.com/api/v1/auth/clerk/webhook
+https://your-app.vercel.app/api/v1/auth/clerk/webhook
 ```
 
-Ensure Django `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, and `CSRF_TRUSTED_ORIGINS` include your Vercel domain and Render API domain.
+Subscribe to `user.created`, `user.updated`, and `user.deleted`. Nginx forwards Svix signature headers to Django.
+
+### 6. Verify
+
+```bash
+# Direct VM health (HTTP)
+curl -fsS http://<AWS_ELASTIC_IP>/api/v1/health
+
+# Proxied through Vercel (HTTPS)
+curl -fsS https://your-app.vercel.app/api/v1/health
+
+# Container status
+docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml logs -f web celery_worker nginx
+```
+
+Smoke tests: sign-in, profile save, resume generation (202 + poll), PDF download, Clerk user sync.
+
+### 7. Persistence and upgrades
+
+- Generated PDFs live in the Docker named volume `generated_pdfs`, shared by `web` and `celery_worker`.
+- The volume survives container recreation on the **same VM**; it does **not** survive VM replacement. Use EBS snapshots / AMI backups for durability.
+- Users should still download PDFs promptly (`DATA_TTL_HOURS`, default 24).
+- Upgrade: push to `main` and let CI/CD deploy, or manually:
+
+```bash
+git pull
+export BACKEND_IMAGE=ghcr.io/ashoksanaka/resume-refiner-backend:latest
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+```
+
+The `migrate` service re-runs migrations and `collectstatic` on each recreate.
+
+## CI/CD (GitHub Actions)
+
+Two workflows in [`.github/workflows`](.github/workflows):
+
+| Workflow | Trigger | What it does |
+|----------|---------|--------------|
+| [`ci.yml`](.github/workflows/ci.yml) | Pull requests, non-`main` pushes | Runs `pytest` against a Postgres service and validates the Docker image builds |
+| [`deploy.yml`](.github/workflows/deploy.yml) | Push to `main`, manual dispatch | Runs CI, builds and pushes the image to GHCR, then deploys to the AWS VM over SSH |
+
+```mermaid
+flowchart LR
+  push[Push to main] --> test[CI tests]
+  test --> build[Build image]
+  build --> ghcr[(GHCR)]
+  build --> ssh[SSH to AWS VM]
+  ghcr --> pull[VM docker compose pull]
+  ssh --> pull
+  pull --> up[compose up -d]
+  up --> health[healthz check]
+```
+
+### Deployment flow
+
+1. `deploy.yml` reuses `ci.yml` and blocks on green tests.
+2. The image is built once and pushed to `ghcr.io/ashoksanaka/resume-refiner-backend` tagged with the commit SHA and `latest`.
+3. The `deploy` job SSHes into the VM, fast-forwards the checked-out repo to the deployed SHA (for `docker-compose.prod.yml` / `deploy/nginx.conf`), then runs [`scripts/deploy.sh`](scripts/deploy.sh) which logs in to GHCR, pulls the image, restarts the stack, prunes old images, and polls `/healthz`.
+
+### Required GitHub configuration
+
+Create a `production` environment (Settings -> Environments) and add these secrets:
+
+| Secret | Description |
+|--------|-------------|
+| `AWS_VM_HOST` | VM public IP / DNS (Elastic IP) |
+| `AWS_VM_USER` | SSH user (e.g. `ubuntu`) |
+| `AWS_VM_SSH_KEY` | Private SSH key (PEM) with access to the VM |
+| `AWS_VM_SSH_PORT` | Optional SSH port (defaults to `22`) |
+| `AWS_VM_APP_DIR` | Optional repo path on the VM (defaults to `~/Resume-Refiner-Backend`) |
+
+`GITHUB_TOKEN` is provided automatically and is used to push to and pull from GHCR (no extra registry secret needed).
+
+### One-time VM bootstrap
+
+On the AWS VM (see [AWS VM Deployment](#aws-vm-deployment-docker-compose) for security groups and Docker install):
+
+```bash
+# Clone into the path referenced by AWS_VM_APP_DIR (default shown)
+git clone https://github.com/Ashoksanaka/Resume-Refiner-Backend.git ~/Resume-Refiner-Backend
+cd ~/Resume-Refiner-Backend
+cp .env.example .env   # fill production values (never committed)
+```
+
+Ensure the SSH user is in the `docker` group so the pipeline can run Docker without `sudo`:
+
+```bash
+sudo usermod -aG docker "$USER"   # then reconnect
+```
+
+After that, every push to `main` deploys automatically. Use the Actions tab -> "Deploy to AWS VM" -> "Run workflow" to deploy manually.
 
 ## Project Structure
 
@@ -255,14 +347,16 @@ backend/
 │   ├── profiles/           # User profile management
 │   └── resumes/            # Resume generation & management
 ├── config/                 # Django project settings
-├── render.yaml             # Render Blueprint (free web service)
-├── Procfile                # Process types (Render / Railway)
-├── railway.toml            # Railway deploy config (alternative)
-├── scripts/start-render-free.sh  # API + Celery worker + beat (Render free)
-├── scripts/start-web.sh          # Gunicorn only (local Docker web)
+├── .github/workflows/      # CI (tests) and Deploy (GHCR + SSH) pipelines
+├── deploy/nginx.conf       # Production Nginx reverse proxy
+├── scripts/start-web.sh          # Gunicorn
+├── scripts/start-migrate.sh      # migrate + sync_templates + collectstatic
+├── scripts/deploy.sh             # VM deploy: pull image + compose up + healthcheck
 ├── Dockerfile
-├── docker-compose.yml      # Local dev (backend + celery only)
-└── requirements.txt
+├── docker-compose.yml      # Local dev (backend + celery)
+├── docker-compose.prod.yml # AWS VM production stack
+├── requirements.txt        # Runtime dependencies (Docker image)
+└── requirements-dev.txt    # Runtime + pytest / factories
 ```
 
 ## API Documentation
@@ -273,7 +367,8 @@ backend/
 ## Running Tests
 
 ```bash
-pytest app/ai/ app/common/clients/tests/ app/resumes/tests.py -v
+pip install -r requirements-dev.txt
+pytest app/profiles/test_picture_upload.py app/authentication/tests.py app/resumes/tests.py -v
 ```
 
 ## Troubleshooting
@@ -284,7 +379,8 @@ pytest app/ai/ app/common/clients/tests/ app/resumes/tests.py -v
 
 ### Celery Tasks Not Running
 - Ensure `CELERY_BROKER_URL` uses Redis Cloud `rediss://` URL.
-- Check worker logs: `docker compose logs celery_worker`
+- Check worker logs: `docker compose -f docker-compose.prod.yml logs celery_worker`
+  (local dev: `docker compose logs celery_worker`)
 
 ### AI Generation Fails
 - Verify `NVIDIA_API_KEY` is set on the **worker** service (generation runs in Celery).

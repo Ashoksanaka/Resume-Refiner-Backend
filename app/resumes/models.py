@@ -212,9 +212,14 @@ class ResumeGenerationRequest(TemporaryResource):
         self.status = self.STATUS_PROCESSING
         self.started_at = timezone.now()
         self.save(update_fields=['status', 'started_at', 'updated_at'])
-    
-    def mark_success(self, latex_source: str, pdf_path: str, modifications: list = None):
-        """Mark the request as successfully completed."""
+
+    def mark_success(
+        self,
+        latex_source: str,
+        pdf_path: str,
+        modifications: list = None,
+    ):
+        """Mark the request as successfully completed with compiled PDF."""
         from django.utils import timezone
         self.status = self.STATUS_SUCCESS
         self.generated_latex = latex_source

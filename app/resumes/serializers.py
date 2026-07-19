@@ -88,8 +88,14 @@ class ResumeGenerationRequestSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ResumeGenerationRequest
-        fields = ['id', 'status', 'failure_reason', 'created_at', 'expires_at']
-        read_only_fields = ['id', 'status', 'failure_reason', 'created_at', 'expires_at']
+        fields = [
+            'id',
+            'status',
+            'failure_reason',
+            'created_at',
+            'expires_at',
+        ]
+        read_only_fields = fields
 
 
 class ResumeGenerationCreateSerializer(serializers.Serializer):
@@ -99,13 +105,13 @@ class ResumeGenerationCreateSerializer(serializers.Serializer):
     Request:
     {
         "job_description_id": "<uuid>",
-        "template_id": "<string>" (optional, defaults to 'tccv'),
+        "template_id": "<string>" (optional, defaults to 'main'),
         "sections": ["experience", "education", ...]
     }
     """
     
     job_description_id = serializers.UUIDField()
-    template_id = serializers.CharField(max_length=100, required=False, default='tccv', write_only=True)
+    template_id = serializers.CharField(max_length=100, required=False, default='main', write_only=True)
     sections = serializers.ListField(
         child=serializers.CharField(max_length=50),
         min_length=1,

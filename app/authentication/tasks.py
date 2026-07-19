@@ -16,17 +16,6 @@ logger = logging.getLogger(__name__)
 
 
 @shared_task
-def cleanup_expired_tokens():
-    """
-    Legacy task name retained for Celery Beat compatibility.
-
-    Token cleanup is no longer required after Clerk migration.
-    """
-    logger.info('cleanup_expired_tokens skipped (Clerk auth)')
-    return {'skipped': True}
-
-
-@shared_task
 def cleanup_expired_idempotency_keys():
     """Delete all expired idempotency keys."""
     now = timezone.now()

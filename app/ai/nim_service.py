@@ -34,7 +34,9 @@ def _get_nim_client() -> Optional[OpenAI]:
     api_key = getattr(settings, 'NVIDIA_API_KEY', '')
     if not api_key:
         return None
-    base_url = getattr(settings, 'NVIDIA_API_BASE_URL', 'https://integrate.api.nvidia.com/v1')
+    base_url = getattr(settings, 'NVIDIA_API_BASE_URL', '') or ''
+    if not base_url:
+        return None
     return OpenAI(base_url=base_url, api_key=api_key)
 
 
@@ -860,110 +862,110 @@ async def generate_resume(
         if nim_result.finish_reason == "length":
             logger.warning("[AI Agent Service] Response was truncated due to token limit")
         
-        logger.info("[AI Agent Service] Received raw response from NVIDIA NIM (length: %d chars)", len(latex_source))
-        
-        # Log a sample of the raw response
-        logger.info("[AI Agent Service] Raw response preview (first 1000 chars): %s", latex_source[:1000])
-        logger.info("[AI Agent Service] Raw response preview (last 500 chars): %s", latex_source[-500:] if len(latex_source) > 500 else latex_source)
-        
-        # Check body content in RAW response BEFORE any cleanup
+        logger.info(
+            "[AI Agent Service] Received raw response from NVIDIA NIM (length: %d chars)",
+            len(latex_source),
+        )
+
+        # Structural diagnostics only — never log LaTeX body / PII
         raw_body_start = latex_source.find('\\begin{document}')
         raw_body_end = latex_source.find('\\end{document}')
         if raw_body_start != -1 and raw_body_end != -1:
             raw_body = latex_source[raw_body_start:raw_body_end]
             raw_body_no_ws = re.sub(r'\s+', '', raw_body)
             raw_has_sections = _has_section_headings(raw_body)
-            logger.info("[AI Agent Service] RAW response body check - Length: %d chars, Has sections: %s", 
-                       len(raw_body_no_ws), raw_has_sections)
+            logger.info(
+                "[AI Agent Service] RAW response body check - Length: %d chars, Has sections: %s",
+                len(raw_body_no_ws),
+                raw_has_sections,
+            )
             if raw_has_sections:
-                # Extract section names to verify
-                section_matches = re.findall(r'\\section\*?\{([^}]+)\}', raw_body)
-                logger.info("[AI Agent Service] RAW response contains sections: %s", section_matches[:10])
-        
+                section_count = len(re.findall(r'\\section\*?\{([^}]+)\}', raw_body))
+                logger.info("[AI Agent Service] RAW response section count: %d", section_count)
+
         # Clean up if the model wrapped it in markdown code blocks despite instructions
-        logger.debug("[AI Agent Service] Cleaning up markdown code blocks if present")
         if latex_source.startswith("```latex"):
             latex_source = latex_source[8:]
-            logger.debug("[AI Agent Service] Removed ```latex prefix")
         elif latex_source.startswith("```"):
             latex_source = latex_source[3:]
-            logger.debug("[AI Agent Service] Removed ``` prefix")
         if latex_source.endswith("```"):
             latex_source = latex_source[:-3]
-            logger.debug("[AI Agent Service] Removed ``` suffix")
-            
+
         latex_source = latex_source.strip()
         logger.info("[AI Agent Service] Cleaned LaTeX source length: %d chars", len(latex_source))
-        
-        # Check body content AFTER markdown cleanup
+
         cleaned_body_start = latex_source.find('\\begin{document}')
         cleaned_body_end = latex_source.find('\\end{document}')
         if cleaned_body_start != -1 and cleaned_body_end != -1:
             cleaned_body = latex_source[cleaned_body_start:cleaned_body_end]
             cleaned_body_no_ws = re.sub(r'\s+', '', cleaned_body)
             cleaned_has_sections = _has_section_headings(cleaned_body)
-            logger.info("[AI Agent Service] AFTER markdown cleanup body check - Length: %d chars, Has sections: %s", 
-                       len(cleaned_body_no_ws), cleaned_has_sections)
+            logger.info(
+                "[AI Agent Service] AFTER markdown cleanup body check - Length: %d chars, Has sections: %s",
+                len(cleaned_body_no_ws),
+                cleaned_has_sections,
+            )
             if cleaned_has_sections:
-                section_matches = re.findall(r'\\section\*?\{([^}]+)\}', cleaned_body)
-                logger.info("[AI Agent Service] Sections found after cleanup: %s", section_matches[:10])
-        
+                section_count = len(re.findall(r'\\section\*?\{([^}]+)\}', cleaned_body))
+                logger.info("[AI Agent Service] Sections found after cleanup: %d", section_count)
+
         # Check if output appears incomplete BEFORE validation
         # If it ends abruptly without \end{document}, try to complete it
         if '\\end{document}' not in latex_source:
             logger.warning("[AI Agent Service] Response missing \\end{document}, attempting to complete")
-            # Try to add closing tag if document structure exists
             if '\\begin{document}' in latex_source:
                 latex_source += '\n\\end{document}'
                 logger.info("[AI Agent Service] Added missing \\end{document}")
-        
-        # Check if output is suspiciously short (likely incomplete)
-        # A complete resume should be at least 500-1000 chars after cleaning
+
         if len(latex_source) < 500:
-            logger.warning("[AI Agent Service] Output is very short (%d chars), may be incomplete", len(latex_source))
-        
-        # Store original body length for comparison
+            logger.warning(
+                "[AI Agent Service] Output is very short (%d chars), may be incomplete",
+                len(latex_source),
+            )
+
         body_start_orig = latex_source.find('\\begin{document}')
         body_end_orig = latex_source.find('\\end{document}')
         original_body_length = 0
         if body_start_orig != -1 and body_end_orig != -1:
             original_body_content = latex_source[body_start_orig:body_end_orig]
             original_body_length = len(re.sub(r'\s+', '', original_body_content))
-            logger.info("[AI Agent Service] Original body length BEFORE fixes: %d chars", original_body_length)
-        
-        # Fix common LaTeX issues that cause compilation failures
-        logger.info("[AI Agent Service] Fixing common LaTeX issues (environment mismatches, unclosed environments, etc.)")
+            logger.info(
+                "[AI Agent Service] Original body length BEFORE fixes: %d chars",
+                original_body_length,
+            )
+
+        logger.info(
+            "[AI Agent Service] Fixing common LaTeX issues "
+            "(environment mismatches, unclosed environments, etc.)"
+        )
         latex_source_before_fixes = latex_source
         latex_source = fix_latex_issues(latex_source)
-        logger.info("[AI Agent Service] LaTeX fixes applied. Final LaTeX source length: %d chars", len(latex_source))
-        
-        # Check if fixes removed too much content (more than 50% reduction is suspicious)
+        logger.info(
+            "[AI Agent Service] LaTeX fixes applied. Final LaTeX source length: %d chars",
+            len(latex_source),
+        )
+
         body_start_after = latex_source.find('\\begin{document}')
         body_end_after = latex_source.find('\\end{document}')
         if body_start_after != -1 and body_end_after != -1:
             body_content_after = latex_source[body_start_after:body_end_after]
             body_no_ws_after = re.sub(r'\s+', '', body_content_after)
             body_length_after = len(body_no_ws_after)
-            
+
             logger.info("[AI Agent Service] Body length AFTER fixes: %d chars", body_length_after)
-            
-            # If fixes removed more than 50% of content, something went wrong
+
             if original_body_length > 0 and body_length_after < (original_body_length * 0.5):
-                logger.error("[AI Agent Service] CRITICAL: fix_latex_issues removed too much content! Original: %d, After: %d", 
-                           original_body_length, body_length_after)
-                logger.error("[AI Agent Service] Body content BEFORE fixes (first 1000 chars): %s", 
-                           latex_source_before_fixes[latex_source_before_fixes.find('\\begin{document}'):latex_source_before_fixes.find('\\begin{document}')+1000] if '\\begin{document}' in latex_source_before_fixes else latex_source_before_fixes[:1000])
-                logger.error("[AI Agent Service] Body content AFTER fixes (first 1000 chars): %s", 
-                           latex_source[latex_source.find('\\begin{document}'):latex_source.find('\\begin{document}')+1000] if '\\begin{document}' in latex_source else latex_source[:1000])
-                logger.error("[AI Agent Service] Restoring original LaTeX and skipping aggressive fixes")
-                # Restore original and only apply safe fixes
+                logger.error(
+                    "[AI Agent Service] CRITICAL: fix_latex_issues removed too much content! "
+                    "Original: %d, After: %d. Restoring original with safe fixes only.",
+                    original_body_length,
+                    body_length_after,
+                )
                 latex_source = latex_source_before_fixes
-                # Apply safe environment fixes (stack-based, doesn't remove content)
                 latex_source = fix_mismatched_environments(latex_source)
                 latex_source = close_unclosed_environments(latex_source)
                 logger.info("[AI Agent Service] Restored original LaTeX with only safe fixes applied")
-                
-                # Verify restoration worked
+
                 restored_body_start = latex_source.find('\\begin{document}')
                 restored_body_end = latex_source.find('\\end{document}')
                 if restored_body_start != -1 and restored_body_end != -1:
@@ -984,15 +986,18 @@ async def generate_resume(
             body_no_ws = re.sub(r'\s+', '', body_content)
             has_sections = _has_section_headings(body_content)
             
-            logger.info("[AI Agent Service] Body content check AFTER fixes - Length: %d chars, Has sections: %s", 
-                       len(body_no_ws), has_sections)
-            
+            logger.info(
+                "[AI Agent Service] Body content check AFTER fixes - Length: %d chars, Has sections: %s",
+                len(body_no_ws),
+                has_sections,
+            )
+
             # If body is very short and has no sections, try to request continuation
             if len(body_no_ws) < 300 and not has_sections:
-                logger.warning("[AI Agent Service] Output appears incomplete AFTER fixes - body too short and no sections detected")
-                logger.warning("[AI Agent Service] Body preview: %s", body_content[:500])
-                
-                # Try to continue generation by requesting the AI to complete the document
+                logger.warning(
+                    "[AI Agent Service] Output appears incomplete AFTER fixes - "
+                    "body too short and no sections detected"
+                )
                 logger.info("[AI Agent Service] Attempting to request continuation from AI")
                 continuation_prompt = f"""The LaTeX document you produced is incomplete.
 

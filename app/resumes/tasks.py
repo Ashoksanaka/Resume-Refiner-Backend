@@ -153,6 +153,14 @@ def process_resume_generation(self, generation_id: str):
         finally:
             loop.close()
 
+        generation_request.refresh_from_db()
+        if generation_request.status == ResumeGenerationRequest.STATUS_CANCELLED:
+            logger.info(
+                "[PDF Generation] Generation cancelled after compile (not overwriting): %s",
+                generation_id,
+            )
+            return
+
         generation_request.mark_success(
             latex_source=latex_source,
             pdf_path=compile_result.pdf_path,

@@ -22,7 +22,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from django.conf import settings
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
-from PIL import Image
+from PIL import Image, ImageFile
 from io import BytesIO
 from app.profiles.serializers import (
     ProfileSerializer,
@@ -253,8 +253,25 @@ class ProfilePictureView(APIView):
             # Get or create profile
             profile, _ = ProfileService.get_or_create_profile(request.user)
             
-            # Read image
-            image = Image.open(file)
+            # Decode from in-memory bytes only (never pass upload paths to Pillow)
+            raw = file.read()
+            if len(raw) > self.MAX_FILE_SIZE:
+                raise InvalidPayloadException(
+                    message=f'File too large. Maximum size: {self.MAX_FILE_SIZE / (1024 * 1024)}MB.',
+                )
+
+            parser = ImageFile.Parser()
+            parser.feed(raw)
+            image = parser.close()
+            if image is None:
+                raise InvalidPayloadException(
+                    message='Invalid file type. Allowed types: JPEG, PNG.',
+                )
+            if image.format not in {'JPEG', 'PNG'}:
+                raise InvalidPayloadException(
+                    message='Invalid file type. Allowed types: JPEG, PNG.',
+                )
+            image.load()
             image = image.convert('RGB')  # Convert to RGB for JPEG compatibility
             
             # Generate unique filename
@@ -298,7 +315,9 @@ class ProfilePictureView(APIView):
             
             serializer = ProfileSerializer(profile)
             return Response(serializer.data, status=status.HTTP_200_OK)
-            
+
+        except InvalidPayloadException:
+            raise
         except Exception as e:
             logger.error("Error uploading profile picture: %s", str(e))
             raise InvalidPayloadException(
@@ -315,13 +334,9 @@ class ProfilePictureView(APIView):
         """
         # Require verified email
         AuthenticationService.require_verified_email(request.user)
-        
-        try:
-            profile = ProfileService.get_profile(request.user)
-        except ResourceNotFoundException:
-            raise InvalidPayloadException(
-                message='Profile not found.',
-            )
+
+        # Idempotent: succeed when no profile/picture exists yet
+        profile, _ = ProfileService.get_or_create_profile(request.user)
         
         # Remove profile picture from data
         profile_data = profile.data or {}

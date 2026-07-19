@@ -25,14 +25,24 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY SETTINGS
 # =============================================================================
 
-SECRET_KEY = config('SECRET_KEY', default='django-insecure-dev-key-change-in-production')
 DEBUG = config('DEBUG', default=False, cast=bool)
+# Insecure default only for local DEBUG; production requires SECRET_KEY via env.
+SECRET_KEY = config(
+    'SECRET_KEY',
+    default='django-insecure-dev-key-change-in-production' if DEBUG else '',
+)
+if not DEBUG and not SECRET_KEY:
+    raise ImproperlyConfigured(
+        'SECRET_KEY must be set when DEBUG is False. '
+        'Set it in the deployment .env (see .env.example).'
+    )
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=Csv())
 
-# Behind Render/Railway reverse proxy (HTTPS termination at edge)
+# Behind Nginx: trust X-Forwarded-Proto for scheme, but keep Host from the
+# fixed proxy_set_header Host backend (do not prefer client X-Forwarded-Host).
 if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-    USE_X_FORWARDED_HOST = True
+    USE_X_FORWARDED_HOST = False
 
 
 # =============================================================================
@@ -123,8 +133,8 @@ def _database_config() -> dict:
     if not DEBUG and not host:
         raise ImproperlyConfigured(
             'Database not configured for production. Set DIRECT_URL or POSTGRES_HOST '
-            '(and POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD) in Render → '
-            'Environment → resume-refiner-env.'
+            '(and POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD) in the deployment '
+            'environment (.env on the AWS VM or your host secrets).'
         )
 
     return {
@@ -144,7 +154,7 @@ DATABASES = {
 
 
 def _require_production_env() -> None:
-    """Fail fast with a clear error when Render env vars were not set."""
+    """Fail fast with a clear error when required production env vars are missing."""
     if DEBUG:
         return
     missing = []
@@ -158,11 +168,23 @@ def _require_production_env() -> None:
         missing.append('CLERK_SECRET_KEY')
     if not config('CLERK_JWT_ISSUER', default=''):
         missing.append('CLERK_JWT_ISSUER')
+    if not config('CLERK_API_BASE_URL', default=''):
+        missing.append('CLERK_API_BASE_URL')
+    if not config('FRONTEND_URL', default=''):
+        missing.append('FRONTEND_URL')
+    if not config('CORS_ALLOWED_ORIGINS', default=''):
+        missing.append('CORS_ALLOWED_ORIGINS')
+    if not config('CSRF_TRUSTED_ORIGINS', default=''):
+        missing.append('CSRF_TRUSTED_ORIGINS')
+    if not config('NVIDIA_API_BASE_URL', default=''):
+        missing.append('NVIDIA_API_BASE_URL')
+    if not config('FORMATEX_API_BASE_URL', default=''):
+        missing.append('FORMATEX_API_BASE_URL')
     if missing:
         raise ImproperlyConfigured(
             'Missing required environment variables for production: '
             + ', '.join(missing)
-            + '. Add them in Render Dashboard → Environment → resume-refiner-env.'
+            + '. Set them in the deployment .env (see .env.example).'
         )
 
 
@@ -318,21 +340,15 @@ if CELERY_BROKER_URL.startswith('rediss://'):
 # TTL for temporary resources (job descriptions, resumes)
 DATA_TTL_HOURS = config('DATA_TTL_HOURS', default=24, cast=int)
 
-# NVIDIA NIM (in-process resume customization)
+# NVIDIA NIM (in-process resume customization) — base URL from env only
 NVIDIA_API_KEY = config('NVIDIA_API_KEY', default='')
 NVIDIA_MODEL = config('NVIDIA_MODEL', default='nvidia/nemotron-3-super-120b-a12b')
-NVIDIA_API_BASE_URL = config(
-    'NVIDIA_API_BASE_URL',
-    default='https://integrate.api.nvidia.com/v1',
-)
+NVIDIA_API_BASE_URL = config('NVIDIA_API_BASE_URL', default='').rstrip('/')
 NVIDIA_REQUEST_TIMEOUT = config('NVIDIA_REQUEST_TIMEOUT', default=180, cast=int)
 
-# FormaTeX cloud PDF compilation (required for resume PDF generation)
+# FormaTeX cloud PDF compilation — base URL from env only
 FORMATEX_API_KEY = config('FORMATEX_API_KEY', default='')
-FORMATEX_API_BASE_URL = config(
-    'FORMATEX_API_BASE_URL',
-    default='https://api.formatex.io/api/v1',
-)
+FORMATEX_API_BASE_URL = config('FORMATEX_API_BASE_URL', default='').rstrip('/')
 FORMATEX_ENGINE = config('FORMATEX_ENGINE', default='auto')
 FORMATEX_TIMEOUT = config('FORMATEX_TIMEOUT', default=120, cast=int)
 FORMATEX_USE_SMART_COMPILE = config('FORMATEX_USE_SMART_COMPILE', default=True, cast=bool)
@@ -343,8 +359,11 @@ LATEX_TEMPLATES_DIR = BASE_DIR / 'app' / 'latex' / 'templates'
 # Generated PDFs temporary storage
 GENERATED_PDF_DIR = BASE_DIR / 'generated' / 'pdfs'
 
-# Email verification token expiry
-EMAIL_VERIFICATION_TOKEN_EXPIRY_HOURS = config('EMAIL_VERIFICATION_TOKEN_EXPIRY_HOURS', default=24, cast=int)
+# Frontend origin (CORS/docs links) — set via env; local default for DEBUG only
+FRONTEND_URL = config(
+    'FRONTEND_URL',
+    default='http://localhost:3000' if DEBUG else '',
+).rstrip('/')
 
 
 # =============================================================================
@@ -356,33 +375,8 @@ CLERK_JWT_ISSUER = config('CLERK_JWT_ISSUER', default='').rstrip('/')
 CLERK_WEBHOOK_SECRET = config('CLERK_WEBHOOK_SECRET', default='')
 CLERK_AUDIENCE = config('CLERK_AUDIENCE', default='')
 CLERK_JWKS_CACHE_TTL = config('CLERK_JWKS_CACHE_TTL', default=3600, cast=int)
-
-
-# =============================================================================
-# EMAIL CONFIGURATION (SendGrid)
-# =============================================================================
-
-# SendGrid API Key (preferred method)
-# Get your API key from https://app.sendgrid.com/settings/api_keys
-SENDGRID_API_KEY = config('SENDGRID_API_KEY', default='')
-
-# Email settings
-DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='noreply@resume-ai.com')
-EMAIL_FROM_NAME = config('EMAIL_FROM_NAME', default='Resume AI')
-
-# Frontend URL for email links (verification, password reset)
-FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:3000')
-
-# Fallback to Django email backend if SendGrid is not configured
-EMAIL_BACKEND = config(
-    'EMAIL_BACKEND',
-    default='django.core.mail.backends.console.EmailBackend'
-)
-EMAIL_HOST = config('EMAIL_HOST', default='localhost')
-EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
-EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
-EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
-EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
+# Clerk Backend REST API origin (no trailing path). Env-only; no hardcoded default.
+CLERK_API_BASE_URL = config('CLERK_API_BASE_URL', default='').rstrip('/')
 
 
 # =============================================================================
@@ -396,11 +390,14 @@ USE_TZ = True
 
 
 # =============================================================================
-# STATIC FILES
+# STATIC / MEDIA FILES
 # =============================================================================
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 
 
 # =============================================================================

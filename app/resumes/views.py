@@ -213,7 +213,7 @@ class ResumeListCreateView(APIView):
             )
         
         # Use default template if not provided
-        template_id = serializer.validated_data.get('template_id', 'tccv')
+        template_id = serializer.validated_data.get('template_id', 'main')
         
         # Create generation request
         generation_request = ResumeGenerationService.create_generation_request(

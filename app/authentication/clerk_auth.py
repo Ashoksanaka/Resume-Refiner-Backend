@@ -35,8 +35,15 @@ def _fetch_clerk_user_email(clerk_id: str) -> Optional[str]:
     from app.authentication.clerk_services import _extract_primary_email
 
     try:
+        api_base = (
+            getattr(settings, 'CLERK_API_BASE_URL', '') or ''
+        ).rstrip('/')
+        if not api_base:
+            logger.error('CLERK_API_BASE_URL is not configured')
+            return None
+
         response = httpx.get(
-            f'https://api.clerk.com/v1/users/{clerk_id}',
+            f'{api_base}/users/{clerk_id}',
             headers={'Authorization': f'Bearer {secret}'},
             timeout=10.0,
         )

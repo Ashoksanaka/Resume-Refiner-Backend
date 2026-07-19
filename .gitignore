@@ -23,6 +23,8 @@ wheels/
 *.egg
 MANIFEST
 .venv/
+.venv-verify/
+.semgrep-venv/
 venv/
 ENV/
 env/
@@ -93,6 +95,12 @@ test_output.txt
 generated/
 staticfiles/
 media/
+profiles/
+
+# Security scan reports
+semgrep.json
+semgrep*.json
+*.sarif
 
 # Docker (optional local overrides)
 docker-compose.override.yml
@@ -123,18 +131,15 @@ CHANGELOG.md
 *.md.backup
 test-output.txt
 
-# Temporary test files (investigation/debug scripts)
-test_*.py
+# One-off investigation / debug scripts (do not hide app tests)
 run_integration_tests.py
-test_artifacts.py
-test_compile.py
-test_fix_direct.py
-test_real_scenario.py
-
-# Investigation scripts (one-off scripts for debugging)
 scripts/extract_*.py
 scripts/debug_*.py
 scripts/investigate_*.py
+scripts/test_artifacts.py
+scripts/test_compile.py
+scripts/test_fix_direct.py
+scripts/test_real_scenario.py
 
 # Temporary directories
 debug/

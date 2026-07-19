@@ -25,11 +25,9 @@ class FormaTeXClient:
 
     def __init__(self):
         self.api_key = getattr(settings, 'FORMATEX_API_KEY', '')
-        self.base_url = getattr(
-            settings,
-            'FORMATEX_API_BASE_URL',
-            'https://api.formatex.io/api/v1',
-        ).rstrip('/')
+        self.base_url = (getattr(settings, 'FORMATEX_API_BASE_URL', '') or '').rstrip('/')
+        if not self.base_url:
+            raise LatexServiceException('FORMATEX_API_BASE_URL is not configured.')
         self.engine = getattr(settings, 'FORMATEX_ENGINE', 'auto')
         self.timeout = getattr(settings, 'FORMATEX_TIMEOUT', 120)
         self.use_smart_compile = getattr(settings, 'FORMATEX_USE_SMART_COMPILE', True)

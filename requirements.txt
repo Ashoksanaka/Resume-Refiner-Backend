@@ -27,19 +27,9 @@ httpx>=0.26,<1.0
 # NVIDIA NIM (OpenAI-compatible API)
 openai>=1.40,<2.0
 
-# Email
-sendgrid>=6.10,<7.0
-
 # Environment configuration
 python-decouple>=3.8,<4.0
 
 # Utilities
 python-dateutil>=2.8,<3.0
 Pillow>=10.0,<11.0
-
-# Development & Testing
-pytest>=7.4,<8.0
-pytest-django>=4.7,<5.0
-pytest-asyncio>=0.23,<1.0
-factory-boy>=3.3,<4.0
-faker>=22.0,<23.0

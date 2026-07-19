@@ -371,6 +371,105 @@ class TestResumeGenerationCreate:
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_create_generation_response_has_no_output_format_fields(
+        self, api_client, user_with_profile, job_description, template
+    ):
+        """PDF-only API does not expose output_format or artifacts."""
+        api_client.force_authenticate(user=user_with_profile)
+
+        response = api_client.post(
+            '/api/v1/resumes',
+            {
+                'job_description_id': str(job_description.id),
+                'template_id': template.id,
+                'sections': DEFAULT_SECTIONS,
+            },
+            format='json',
+        )
+
+        assert response.status_code == status.HTTP_202_ACCEPTED
+        assert 'output_format' not in response.data
+        assert 'artifacts' not in response.data
+        assert set(response.data.keys()) >= {
+            'id', 'status', 'failure_reason', 'created_at', 'expires_at',
+        }
+
+
+@pytest.mark.django_db
+class TestPdfOnlyGenerationPipeline:
+    """Every successful generation must compile to PDF via FormaTeX."""
+
+    def test_task_always_compiles_pdf(self, user_with_profile, job_description, template):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from app.resumes.tasks import process_resume_generation
+        from app.common.clients.ai_agent import AIGenerationResult
+        from app.common.clients.latex_service import CompilationResult
+
+        latex = (
+            r'\documentclass{article}\begin{document}'
+            r'\resumeHeader{Jane Doe}'
+            r'\resumeSectionTitle{PROFESSIONAL EXPERIENCE}'
+            r'\begin{itemize}\resumeItem{TechCorp}\end{itemize}'
+            r'\end{document}'
+        )
+        request = ResumeGenerationRequest.objects.create(
+            user=user_with_profile,
+            job_description=job_description,
+            template_id=template.id,
+            profile_snapshot=user_with_profile.profile.data,
+            selected_sections=['experience'],
+            status=ResumeGenerationRequest.STATUS_PENDING,
+        )
+
+        mock_latex_client = MagicMock()
+        mock_latex_client.get_resume_template_content = AsyncMock(return_value='\\documentclass{article}')
+        mock_latex_client.compile_latex = AsyncMock(
+            return_value=CompilationResult(
+                pdf_path='/tmp/test-resume.pdf',
+                compilation_log='',
+                success=True,
+            )
+        )
+
+        mock_ai = MagicMock()
+        mock_ai.generate_resume = AsyncMock(
+            return_value=AIGenerationResult(
+                latex_source=latex,
+                modifications=['ok'],
+                raw_response={},
+            )
+        )
+
+        with patch('app.resumes.tasks.LaTeXServiceClient', return_value=mock_latex_client), \
+             patch('app.resumes.tasks.AIAgentClient', return_value=mock_ai), \
+             patch('app.resumes.tasks.ResumeGenerationService.validate_ai_output'):
+            process_resume_generation(str(request.id))
+
+        request.refresh_from_db()
+        assert request.status == 'success'
+        assert request.generated_latex == latex
+        assert request.generated_pdf_path == '/tmp/test-resume.pdf'
+        mock_latex_client.compile_latex.assert_called_once()
+
+    def test_download_requires_pdf_path(
+        self, api_client, user_with_profile, job_description, template
+    ):
+        request = ResumeGenerationRequest.objects.create(
+            user=user_with_profile,
+            job_description=job_description,
+            template_id=template.id,
+            profile_snapshot=user_with_profile.profile.data,
+            selected_sections=DEFAULT_SECTIONS,
+            status=ResumeGenerationRequest.STATUS_SUCCESS,
+            generated_latex=r'\documentclass{article}\begin{document}x\end{document}',
+            generated_pdf_path=None,
+        )
+
+        api_client.force_authenticate(user=user_with_profile)
+        response = api_client.get(f'/api/v1/resumes/{request.id}/download')
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
 
 @pytest.mark.django_db
 class TestTemplateBasedGeneration:

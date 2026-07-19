@@ -4,7 +4,6 @@ Celery configuration for the Resume AI platform.
 Handles async task processing for:
 - Resume generation (AI agent + LaTeX compilation)
 - TTL cleanup (deleting expired resources)
-- Email sending
 """
 
 import os
@@ -39,11 +38,6 @@ app.conf.beat_schedule = {
         'task': 'app.common.tasks.cleanup_orphan_pdfs',
         'schedule': crontab(hour=3, minute=0),  # Daily at 3:00 AM
     },
-    # Clean up expired verification tokens daily
-    'cleanup-expired-tokens': {
-        'task': 'app.authentication.tasks.cleanup_expired_tokens',
-        'schedule': crontab(hour=3, minute=30),  # Daily at 3:30 AM
-    },
     # Clean up expired idempotency keys daily
     'cleanup-expired-idempotency-keys': {
         'task': 'app.authentication.tasks.cleanup_expired_idempotency_keys',
@@ -63,13 +57,3 @@ app.conf.task_routes = {
     'app.common.tasks.*': {'queue': 'maintenance'},
     'app.authentication.tasks.*': {'queue': 'maintenance'},
 }
-
-
-# =============================================================================
-# DEBUG TASK
-# =============================================================================
-
-@app.task(bind=True, ignore_result=True)
-def debug_task(self):
-    """Debug task to verify Celery is working."""
-    print(f'Request: {self.request!r}')

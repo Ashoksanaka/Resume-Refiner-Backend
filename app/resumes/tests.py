@@ -552,18 +552,18 @@ class TestResumeGenerationCancel:
     def test_cancel_pending_generation(self, api_client, user_with_profile, job_description, template):
         api_client.force_authenticate(user=user_with_profile)
 
-        create_response = api_client.post(
-            '/api/v1/resumes',
-            {
-                'job_description_id': str(job_description.id),
-                'template_id': template.id,
-                'sections': DEFAULT_SECTIONS,
-            },
-            format='json',
+        # Create pending request in DB (do not POST /resumes — CELERY_TASK_ALWAYS_EAGER
+        # would run generation immediately and leave status=failed before cancel).
+        request = ResumeGenerationRequest.objects.create(
+            user=user_with_profile,
+            job_description=job_description,
+            template_id=template.id,
+            status=ResumeGenerationRequest.STATUS_PENDING,
+            profile_snapshot=user_with_profile.profile.data,
+            selected_sections=DEFAULT_SECTIONS,
         )
-        generation_id = create_response.data['id']
 
-        response = api_client.post(f'/api/v1/resumes/{generation_id}/cancel')
+        response = api_client.post(f'/api/v1/resumes/{request.id}/cancel')
 
         assert response.status_code == status.HTTP_200_OK
         assert response.data['status'] == 'cancelled'
@@ -1234,98 +1234,8 @@ class TestStatusTransitions:
 # =============================================================================
 # Template Tests
 # =============================================================================
-
-@pytest.mark.django_db
-class TestTemplates:
-    """Tests for template endpoints."""
-    
-    def test_list_templates(self, api_client, template):
-        """Test listing templates (public endpoint)."""
-        response = api_client.get('/api/v1/templates')
-        
-        assert response.status_code == status.HTTP_200_OK
-        assert len(response.data) == 1
-        assert response.data[0]['id'] == template.id
-    
-    def test_get_template(self, api_client, template):
-        """Test getting a specific template."""
-        response = api_client.get(f'/api/v1/templates/{template.id}')
-        
-        assert response.status_code == status.HTTP_200_OK
-        assert response.data['name'] == 'Professional Modern'
-    
-    def test_get_nonexistent_template(self, api_client):
-        """Test getting non-existent template returns 404."""
-        response = api_client.get('/api/v1/templates/nonexistent')
-        
-        assert response.status_code == status.HTTP_404_NOT_FOUND
-    
-    def test_template_includes_version(self, api_client, template):
-        """Test that template response includes version for cache invalidation."""
-        response = api_client.get(f'/api/v1/templates/{template.id}')
-        
-        assert response.status_code == status.HTTP_200_OK
-        assert 'version' in response.data
-        assert response.data['version'] == '1.0.0'
-    
-    def test_template_includes_preview_urls(self, api_client, template):
-        """Test that template response includes preview URLs when available."""
-        response = api_client.get(f'/api/v1/templates/{template.id}')
-        
-        assert response.status_code == status.HTTP_200_OK
-        assert 'has_preview' in response.data
-        assert 'preview_png_url' in response.data
-        assert 'preview_pdf_url' in response.data
-        
-        # Template has has_preview=True, so URLs should be set
-        assert response.data['has_preview'] is True
-        assert response.data['preview_png_url'] is not None
-        assert f'/templates/{template.id}/preview.png' in response.data['preview_png_url']
-    
-    def test_template_without_preview_has_null_urls(self, api_client, db):
-        """Test that templates without previews have null URLs."""
-        no_preview_template = Template.objects.create(
-            id='no-preview',
-            name='No Preview Template',
-            description='A template without preview.',
-            author='Test',
-            version='1.0.0',
-            has_preview=False,
-            is_active=True
-        )
-        
-        response = api_client.get(f'/api/v1/templates/{no_preview_template.id}')
-        
-        assert response.status_code == status.HTTP_200_OK
-        assert response.data['has_preview'] is False
-        assert response.data['preview_png_url'] is None
-        assert response.data['preview_pdf_url'] is None
-    
-    def test_inactive_template_not_listed(self, api_client, template, db):
-        """Test that inactive templates are not listed."""
-        inactive_template = Template.objects.create(
-            id='inactive',
-            name='Inactive Template',
-            description='An inactive template.',
-            author='Test',
-            version='1.0.0',
-            is_active=False
-        )
-        
-        response = api_client.get('/api/v1/templates')
-        
-        assert response.status_code == status.HTTP_200_OK
-        template_ids = [t['id'] for t in response.data]
-        assert 'inactive' not in template_ids
-        assert template.id in template_ids
-    
-    def test_template_author_field(self, api_client, template):
-        """Test that template includes author field."""
-        response = api_client.get(f'/api/v1/templates/{template.id}')
-        
-        assert response.status_code == status.HTTP_200_OK
-        assert 'author' in response.data
-        assert response.data['author'] == 'Resume AI Platform'
+# HTTP /api/v1/templates endpoints were removed (TemplateSerializer gone).
+# Model-level validation remains below.
 
 
 @pytest.mark.django_db

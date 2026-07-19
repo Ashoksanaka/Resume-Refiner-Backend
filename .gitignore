@@ -24,6 +24,7 @@ wheels/
 MANIFEST
 .venv/
 .venv-verify/
+.venv-ci/
 .semgrep-venv/
 venv/
 ENV/

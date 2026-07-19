@@ -1,0 +1,359 @@
+{
+  "personalInfo": {
+    "full_name": "Jane Smith",
+    "email": "test@example.com",
+    "phone_number": "+1-5551234567",
+    "location": "San Francisco, USA",
+    "portfolio_url": "https://janesmith.dev"
+  },
+  "summary": "Senior software engineer with 10+ years of experience in building scalable web applications.",
+  "experience": [
+    {
+      "company": "Tech Corp",
+      "title": "Senior Software Engineer",
+      "start_date": "2020-01-01",
+      "end_date": null,
+      "description": "Led development of microservices architecture."
+    }
+  ],
+  "education": [
+    {
+      "institution": "University of Technology",
+      "degree_level": "Bachelor's",
+      "course": "BSc",
+      "specialization": "Computer Science",
+      "location": "California, United States",
+      "grade_type": "cgpa",
+      "grade_value": 8.5,
+      "start_date": "2010-09-01",
+      "end_date": "2014-05-30",
+      "description": "Graduated magna cum laude."
+    }
+  ],
+  "skills": [
+    "Python",
+    "JavaScript",
+    "React",
+    "Django"
+  ],
+  "certifications": [
+    {
+      "name": "AWS Certified Solutions Architect",
+      "issuing_organization": "Amazon Web Services",
+      "issue_date": "2022-06-15"
+    }
+  ],
+  "projects": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "title": "E-commerce Platform",
+      "role": "Lead Developer",
+      "description": "Built a scalable e-commerce platform serving 1M+ users.",
+      "start_date": "2021-01-01",
+      "end_date": "2022-12-31",
+      "ongoing": false,
+      "technologies": [
+        "python",
+        "django",
+        "postgresql",
+        "redis"
+      ],
+      "link": "https://example.com/project",
+      "github_url": "https://github.com/janesmith/ecommerce-platform",
+      "deployment_url": "https://shop.example.com",
+      "achievements": [
+        "Reduced load time by 50%",
+        "Achieved 99.9% uptime"
+      ]
+    },
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440001",
+      "title": "Analytics Dashboard",
+      "role": "Full Stack Developer",
+      "description": "Built an internal analytics dashboard for product metrics.",
+      "start_date": "2023-01-01",
+      "end_date": null,
+      "ongoing": true,
+      "technologies": [
+        "react",
+        "typescript",
+        "django"
+      ],
+      "github_url": "https://github.com/janesmith/analytics-dashboard",
+      "achievements": [
+        "Adopted by 5 product teams"
+      ]
+    }
+  ],
+  "achievements": [
+    {
+      "id": "660e8400-e29b-41d4-a716-446655440000",
+      "title": "Employee of the Year",
+      "description": "Recognized for outstanding contributions to platform reliability.",
+      "issuer": "Tech Corp",
+      "location": "San Francisco, USA",
+      "is_virtual": false,
+      "date": "2023-12-01"
+    },
+    {
+      "id": "660e8400-e29b-41d4-a716-446655440001",
+      "title": "Open Source Contributor Award",
+      "description": "Recognized for contributions to major open-source projects.",
+      "issuer": "OS Foundation",
+      "location": "Remote",
+      "is_virtual": true,
+      "date": "2022-06-01"
+    }
+  ],
+  "areas_of_interest": [
+    "machine learning",
+    "cloud computing",
+    "distributed systems"
+  ],
+  "hobbies": [
+    "Reading",
+    "Hiking",
+    "Photography"
+  ],
+  "address": {
+    "street": "123 Main St",
+    "city": "San Francisco",
+    "region": "California",
+    "country": "USA",
+    "postal_code": "94102",
+    "geolocation": {
+      "lat": 37.7749,
+      "lon": -122.4194
+    }
+  },
+  "social_urls": {
+    "linkedin": "https://linkedin.com/in/janesmith",
+    "github": "https://github.com/janesmith",
+    "twitter": "https://twitter.com/janesmith",
+    "portfolio": "https://janesmith.dev",
+    "website": "https://janesmith.com",
+    "other": [
+      {
+        "label": "Medium",
+        "url": "https://medium.com/@janesmith"
+      }
+    ]
+  },
+  "profile_picture": {
+    "url": "https://cdn.example.com/profiles/janesmith.jpg",
+    "thumbnail_url": "https://cdn.example.com/profiles/janesmith_thumb.jpg",
+    "uploaded_at": "2024-01-15T10:30:00Z"
+  },
+  "volunteering": [
+    {
+      "id": "770e8400-e29b-41d4-a716-446655440000",
+      "organization": "Code for Good",
+      "role": "Volunteer Developer",
+      "location": "San Francisco, USA",
+      "start_date": "2020-01-01",
+      "end_date": null,
+      "description": "Developed open-source tools for non-profits."
+    }
+  ],
+  "positions": [
+    {
+      "id": "880e8400-e29b-41d4-a716-446655440000",
+      "title": "Board Member",
+      "organization": "Tech Community Foundation",
+      "location": "San Francisco, USA",
+      "start_date": "2022-01-01",
+      "end_date": null,
+      "description": "Served on the board of directors."
+    }
+  ],
+  "career_breaks": [
+    {
+      "id": "990e8400-e29b-41d4-a716-446655440000",
+      "start_date": "2018-06-01",
+      "end_date": "2019-01-01",
+      "reason": "education",
+      "description": "Pursued advanced certification."
+    }
+  ],
+  "licenses": [
+    {
+      "id": "aa0e8400-e29b-41d4-a716-446655440000",
+      "name": "Professional Engineer",
+      "issuer": "State Board of Engineering",
+      "license_number": "PE-12345",
+      "awarded_date": "2015-05-01",
+      "expiration_date": "2025-05-01",
+      "date": "2015-05-01",
+      "url": "https://example.com/license"
+    }
+  ],
+  "trainings": [
+    {
+      "id": "bb0e8400-e29b-41d4-a716-446655440000",
+      "title": "Advanced Kubernetes",
+      "provider": "CNCF",
+      "start_date": "2023-03-01",
+      "end_date": "2023-03-15",
+      "venue": "Online",
+      "is_virtual": true,
+      "date": "2023-03-15",
+      "certificate_url": "https://example.com/cert",
+      "description": "Comprehensive Kubernetes administration course."
+    }
+  ],
+  "publications": [
+    {
+      "id": "cc0e8400-e29b-41d4-a716-446655440000",
+      "title": "Scalable Microservices Architecture",
+      "subtitle": "Design patterns for cloud-native systems",
+      "authors": [
+        {
+          "name": "Jane Smith",
+          "affiliation": "Tech Corp",
+          "order": 1,
+          "is_corresponding": true,
+          "orcid": "0000-0001-2345-6789"
+        },
+        {
+          "name": "John Doe",
+          "affiliation": "University of Technology",
+          "order": 2,
+          "is_corresponding": false
+        }
+      ],
+      "doi": "10.1109/MS.2023.1234567",
+      "venue": "IEEE Software",
+      "volume": "40",
+      "issue": "5",
+      "page_range": "45-58",
+      "date": "2023-09-01",
+      "publication_year": 2023,
+      "publication_month": 9,
+      "keywords": [
+        "microservices",
+        "cloud computing",
+        "distributed systems"
+      ],
+      "subject_categories": [
+        "Computer Science",
+        "Software Engineering"
+      ],
+      "url": "https://example.com/paper",
+      "landing_page_url": "https://example.com/paper",
+      "pdf_url": "https://example.com/paper.pdf",
+      "language": "English",
+      "publication_type": "journal article",
+      "document_type": "research article",
+      "abstract": "This paper presents a novel approach to microservices.",
+      "citation_count": 12,
+      "altmetric_score": 45.2
+    }
+  ],
+  "patents": [
+    {
+      "id": "dd0e8400-e29b-41d4-a716-446655440000",
+      "title": "Distributed Cache System",
+      "patent_number": "US12345678",
+      "status": "granted",
+      "abstract": "A distributed caching system with automatic invalidation.",
+      "keywords": [
+        "cache",
+        "distributed systems"
+      ],
+      "application_number": "US16/123456",
+      "publication_number": "US2020123456A1",
+      "inventors": [
+        "Jane Smith",
+        "John Doe"
+      ],
+      "applicants": [
+        "Tech Corp"
+      ],
+      "assignees": [
+        "Tech Corp"
+      ],
+      "filing_date": "2020-01-15",
+      "priority_date": "2019-06-01",
+      "publication_date": "2021-03-01",
+      "grant_date": "2022-06-01",
+      "patent_office": "USPTO",
+      "family_id": "FAM-12345",
+      "ipc_codes": [
+        "G06F12/08"
+      ],
+      "cpc_codes": [
+        "G06F12/0864"
+      ],
+      "us_classifications": [
+        "711/118"
+      ],
+      "kind_code": "B2",
+      "legal_status": "active",
+      "url": "https://patents.example.com/12345678",
+      "pdf_url": "https://patents.example.com/12345678.pdf",
+      "forward_citations": 5,
+      "family_size": 3,
+      "publication_languages": [
+        "English"
+      ]
+    }
+  ],
+  "honors_awards": [
+    {
+      "id": "ee0e8400-e29b-41d4-a716-446655440000",
+      "title": "Best Paper Award",
+      "issuer": "IEEE",
+      "date": "2023-09-01",
+      "description": "Recognized for outstanding research contribution."
+    }
+  ],
+  "test_scores": [
+    {
+      "id": "ff0e8400-e29b-41d4-a716-446655440000",
+      "test_name": "GRE",
+      "score": 330,
+      "max_score": 340,
+      "percentile": 95,
+      "date": "2010-06-15"
+    }
+  ],
+  "languages": [
+    {
+      "language": "English",
+      "read_proficiency": "native",
+      "write_proficiency": "native",
+      "speak_proficiency": "native"
+    },
+    {
+      "language": "Spanish",
+      "read_proficiency": "professional",
+      "write_proficiency": "conversational",
+      "speak_proficiency": "conversational",
+      "certification": "DELE B2"
+    },
+    {
+      "language": "French",
+      "read_proficiency": "basic",
+      "write_proficiency": "basic",
+      "speak_proficiency": "basic"
+    }
+  ],
+  "organizations": [
+    {
+      "id": "110e8400-e29b-41d4-a716-446655440000",
+      "name": "IEEE Computer Society",
+      "role": "Member",
+      "location": "Global",
+      "start_date": "2015-01-01",
+      "end_date": null,
+      "description": "Active member since 2015."
+    }
+  ],
+  "contact_info": {
+    "primary_phone": "+1-555-123-4567",
+    "secondary_phone": "+1-555-987-6543",
+    "secondary_email": "jane.personal@example.com",
+    "preferred_contact_method": "email",
+    "timezone": "America/Los_Angeles"
+  }
+}

@@ -7,13 +7,13 @@ career_breaks, licenses, trainings, publications, patents, honors_awards,
 test_scores, languages, organizations, contact_info.
 """
 
-import pytest
 import json
-import os
-import time
 from pathlib import Path
+
+import pytest
 from rest_framework import status
 from rest_framework.test import APIClient
+
 from app.authentication.models import User
 from app.profiles.models import Profile
 
@@ -38,29 +38,14 @@ def verified_user(db):
 @pytest.fixture
 def full_profile_data():
     """Load full profile sample from fixture."""
-    fixture_path = Path(__file__).parent.parent.parent / 'tests' / 'fixtures' / 'full_profile_sample.json'
-    # region agent log
-    with open('/home/ashok/External/Ashok/.cursor/debug-7d33d9.log', 'a') as debug_log:
-        debug_log.write(json.dumps({
-            'sessionId': '7d33d9',
-            'runId': 'pre-fix',
-            'hypothesisId': 'H1,H2,H3,H4',
-            'location': 'app/profiles/test_profile_full_crud.py:full_profile_data',
-            'message': 'Resolving full profile fixture',
-            'data': {
-                'cwd': os.getcwd(),
-                'testFile': str(Path(__file__).resolve()),
-                'fixturePath': str(fixture_path.resolve()),
-                'fixtureExists': fixture_path.exists(),
-                'fixtureParentExists': fixture_path.parent.exists(),
-                'repoTestsExists': (Path(__file__).parent.parent.parent / 'tests').exists(),
-                'appFixtureCandidateExists': (Path(__file__).parent / 'fixtures' / 'full_profile_sample.json').exists(),
-            },
-            'timestamp': int(time.time() * 1000),
-        }) + '\n')
-    # endregion
-    with open(fixture_path, 'r') as f:
-        return json.load(f)
+    fixture_path = (
+        Path(__file__).resolve().parents[2]
+        / 'tests'
+        / 'fixtures'
+        / 'full_profile_sample.json'
+    )
+    with fixture_path.open(encoding='utf-8') as fixture:
+        return json.load(fixture)
 
 
 @pytest.mark.django_db
@@ -104,9 +89,10 @@ class TestFullProfileCRUD:
         
         api_client.force_authenticate(user=verified_user)
         new_project = {
-            'id': 'new-project-id',
+            'id': '550e8400-e29b-41d4-a716-446655440099',
             'title': 'New Project',
             'role': 'Developer',
+            'description': 'A newly added project for PATCH coverage.',
             'ongoing': True,
             'technologies': ['python']
         }
@@ -127,6 +113,9 @@ class TestFullProfileCRUD:
         api_client.force_authenticate(user=verified_user)
         new_language = {
             'language': 'German',
+            'read_proficiency': 'basic',
+            'write_proficiency': 'basic',
+            'speak_proficiency': 'basic',
             'proficiency': 'basic'
         }
         
@@ -203,8 +192,11 @@ class TestFullProfileCRUD:
         
         api_client.force_authenticate(user=verified_user)
         invalid_project = {
-            'title': 'Project without required fields'
-            # Missing id, role, ongoing
+            'id': 'not-a-valid-uuid',
+            'title': 'Project without required fields',
+            'role': 'Developer',
+            'description': 'Invalid because id is not a UUID.',
+            'ongoing': False,
         }
         
         response = api_client.patch(

@@ -8,7 +8,8 @@
 #
 # Local build fallback (no BACKEND_IMAGE set): docker compose -f docker-compose.prod.yml up -d --build
 #
-# Only Nginx publishes port 80. Gunicorn stays on the internal network.
+# Nginx publishes host 8080 → container 80 (avoids conflict with other apps on :80/:443).
+# Gunicorn stays on the internal network (not published on the host).
 
 # Shared image reference: pulled from registry in CI/CD, built locally otherwise.
 x-backend-image: &backend-image ${BACKEND_IMAGE:-resume-refiner-backend:local}
@@ -123,7 +124,7 @@ services:
     image: nginx:1.27-alpine
     container_name: resumeai-nginx
     ports:
-      - "80:80"
+      - "${HTTP_PORT:-8080}:80"
     volumes:
       - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
       - static_files:/staticfiles:ro

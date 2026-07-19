@@ -6,11 +6,13 @@
 #   BACKEND_IMAGE   Fully-qualified image ref, e.g. ghcr.io/owner/repo:<sha>
 # Optional env:
 #   COMPOSE_FILE    Compose file (default: docker-compose.prod.yml)
+#   HTTP_PORT       Host port mapped to Nginx (default: 8080)
 #   GHCR_USER       Registry username for private image pulls
 #   GHCR_TOKEN      Registry token for private image pulls
 set -euo pipefail
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
+HTTP_PORT="${HTTP_PORT:-8080}"
 : "${BACKEND_IMAGE:?BACKEND_IMAGE must be set (e.g. ghcr.io/owner/repo:<sha>)}"
 
 if [ ! -f .env ]; then
@@ -23,16 +25,16 @@ if [ -n "${GHCR_TOKEN:-}" ] && [ -n "${GHCR_USER:-}" ]; then
   echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
 fi
 
-export BACKEND_IMAGE
-echo "Deploying image: ${BACKEND_IMAGE}"
+export BACKEND_IMAGE HTTP_PORT
+echo "Deploying image: ${BACKEND_IMAGE} (host HTTP port ${HTTP_PORT})"
 
 docker compose -f "${COMPOSE_FILE}" pull
 docker compose -f "${COMPOSE_FILE}" up -d --remove-orphans
 docker image prune -f
 
-echo "Waiting for the stack to become healthy..."
+echo "Waiting for the stack to become healthy on :${HTTP_PORT}..."
 for _ in $(seq 1 24); do
-  if curl -fsS http://localhost/healthz >/dev/null 2>&1; then
+  if curl -fsS "http://localhost:${HTTP_PORT}/healthz" >/dev/null 2>&1; then
     echo "Health check passed."
     docker compose -f "${COMPOSE_FILE}" ps
     exit 0

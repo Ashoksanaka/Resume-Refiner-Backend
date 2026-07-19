@@ -158,9 +158,10 @@ Production stack: **Nginx + Gunicorn + Celery worker + Celery beat** via [`docke
 
 1. Launch an EC2 (or equivalent) instance and attach an **Elastic IP**.
 2. Security group:
-   - **Inbound 80/tcp** from `0.0.0.0/0` (Vercel / internet)
+   - **Inbound 8080/tcp** from `0.0.0.0/0` (Vercel / internet — Resume Refiner Nginx)
    - **Inbound 22/tcp** from your admin IP only
-   - Do **not** expose Gunicorn `8000` publicly
+   - Do **not** expose Gunicorn `8000` publicly (it is container-internal only)
+   - Port **80/443** may already be used by another app (e.g. Caddy); this stack defaults to **8080**
 3. Install Docker Engine + Compose plugin on the VM.
 4. Clone this repository onto the VM.
 
@@ -207,7 +208,7 @@ What runs:
 | `web` | Gunicorn (`scripts/start-web.sh`), internal port 8000 |
 | `celery_worker` | Resume generation + maintenance queues |
 | `celery_beat` | Periodic tasks (single instance only) |
-| `nginx` | Public port 80 → proxies `/api/` and `/admin/`, serves `/static/` and `/media/` |
+| `nginx` | Public host port **8080** → container 80; proxies `/api/` and `/admin/`, serves `/static/` and `/media/` |
 
 Migrations run once per deploy in the `migrate` service before web/worker start.
 
@@ -219,12 +220,12 @@ Profile pictures and other uploads are stored under `/app/media` on the named `m
 In the Resume-Refiner-frontend Vercel project (server-only vars):
 
 ```bash
-BACKEND_URL=http://<AWS_ELASTIC_IP>
+BACKEND_URL=http://<AWS_ELASTIC_IP>:8080
 ALLOW_INSECURE_BACKEND=true
 NEXT_PUBLIC_API_URL=/api/v1
 ```
 
-Keep the browser on same-origin `/api/v1` so HTTPS pages never call the HTTP VM directly (mixed-content safe). Redeploy the frontend after setting these.
+Keep the browser on same-origin `/api/v1` so HTTPS pages never call the HTTP VM directly (mixed-content safe). Redeploy the frontend after setting these. Override the host port with `HTTP_PORT` if needed (default `8080`).
 
 When you add TLS on the VM (or an ALB), switch to:
 
@@ -246,8 +247,9 @@ Subscribe to `user.created`, `user.updated`, and `user.deleted`. Nginx forwards 
 ### 6. Verify
 
 ```bash
-# Direct VM health (HTTP)
-curl -fsS http://<AWS_ELASTIC_IP>/api/v1/health
+# Direct VM health (HTTP on 8080 — avoids conflict with other apps on :80)
+curl -fsS http://<AWS_ELASTIC_IP>:8080/api/v1/health
+curl -fsS http://<AWS_ELASTIC_IP>:8080/healthz
 
 # Proxied through Vercel (HTTPS)
 curl -fsS https://your-app.vercel.app/api/v1/health
@@ -300,7 +302,7 @@ flowchart LR
 
 1. `deploy.yml` reuses `ci.yml` and blocks on green tests.
 2. The image is built once and pushed to `ghcr.io/ashoksanaka/resume-refiner-backend` tagged with the commit SHA and `latest`.
-3. The `deploy` job SSHes into the VM, fast-forwards the checked-out repo to the deployed SHA (for `docker-compose.prod.yml` / `deploy/nginx.conf`), then runs [`scripts/deploy.sh`](scripts/deploy.sh) which logs in to GHCR, pulls the image, restarts the stack, prunes old images, and polls `/healthz`.
+3. The `deploy` job SSHes into the VM, fast-forwards the checked-out repo to the deployed SHA (for `docker-compose.prod.yml` / `deploy/nginx.conf`), then runs [`scripts/deploy.sh`](scripts/deploy.sh) which logs in to GHCR, pulls the image, restarts the stack, prunes old images, and polls `http://localhost:8080/healthz`.
 
 ### Required GitHub configuration
 

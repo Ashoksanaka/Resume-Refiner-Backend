@@ -9,6 +9,8 @@ test_scores, languages, organizations, contact_info.
 
 import pytest
 import json
+import os
+import time
 from pathlib import Path
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -37,6 +39,26 @@ def verified_user(db):
 def full_profile_data():
     """Load full profile sample from fixture."""
     fixture_path = Path(__file__).parent.parent.parent / 'tests' / 'fixtures' / 'full_profile_sample.json'
+    # region agent log
+    with open('/home/ashok/External/Ashok/.cursor/debug-7d33d9.log', 'a') as debug_log:
+        debug_log.write(json.dumps({
+            'sessionId': '7d33d9',
+            'runId': 'pre-fix',
+            'hypothesisId': 'H1,H2,H3,H4',
+            'location': 'app/profiles/test_profile_full_crud.py:full_profile_data',
+            'message': 'Resolving full profile fixture',
+            'data': {
+                'cwd': os.getcwd(),
+                'testFile': str(Path(__file__).resolve()),
+                'fixturePath': str(fixture_path.resolve()),
+                'fixtureExists': fixture_path.exists(),
+                'fixtureParentExists': fixture_path.parent.exists(),
+                'repoTestsExists': (Path(__file__).parent.parent.parent / 'tests').exists(),
+                'appFixtureCandidateExists': (Path(__file__).parent / 'fixtures' / 'full_profile_sample.json').exists(),
+            },
+            'timestamp': int(time.time() * 1000),
+        }) + '\n')
+    # endregion
     with open(fixture_path, 'r') as f:
         return json.load(f)
 

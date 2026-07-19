@@ -225,7 +225,9 @@ ALLOW_INSECURE_BACKEND=true
 NEXT_PUBLIC_API_URL=/api/v1
 ```
 
-Keep the browser on same-origin `/api/v1` so HTTPS pages never call the HTTP VM directly (mixed-content safe). Redeploy the frontend after setting these. Override the host port with `HTTP_PORT` if needed (default `8080`).
+Keep the browser on same-origin `/api/v1` and `/media` (Next.js rewrites) so HTTPS
+pages never call the HTTP VM directly — mixed-content safe. Redeploy the frontend
+after setting these. Override the host port with `HTTP_PORT` if needed (default `8080`).
 
 When you add TLS on the VM (or an ALB), switch to:
 

@@ -7,10 +7,13 @@ Ensures custom resume macros are defined and forbidden/undefined commands like
 
 from __future__ import annotations
 
+import logging
 import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 ATS_MACRO_NAMES = (
     "resumeHeader",
@@ -193,9 +196,61 @@ def analyze_ats_preamble(source: str) -> dict[str, Any]:
     }
 
 
+def strip_xetex_only_packages(source: str) -> str:
+    """
+    Remove XeLaTeX/LuaLaTeX-only packages the AI sometimes injects.
+
+    The ATS resume templates target pdflatex (FormaTeX engine=auto often picks
+    pdfTeX). Packages like fontspec fatally abort under pdflatex.
+    """
+    patterns = (
+        r'\\usepackage(?:\[[^\]]*\])?\{fontspec\}',
+        r'\\usepackage(?:\[[^\]]*\])?\{unicode-math\}',
+        r'\\setmainfont(?:\[[^\]]*\])?\{[^}]*\}',
+        r'\\setsansfont(?:\[[^\]]*\])?\{[^}]*\}',
+        r'\\setmonofont(?:\[[^\]]*\])?\{[^}]*\}',
+        r'\\newfontfamily\s*\\[A-Za-z@]+(?:\[[^\]]*\])?\{[^}]*\}',
+    )
+    cleaned = source
+    removed = []
+    for pattern in patterns:
+        cleaned, n = re.subn(pattern, '', cleaned)
+        if n:
+            removed.append(pattern)
+    if removed:
+        # region agent log
+        try:
+            import json as _json, time as _time
+            _payload = {
+                'sessionId': '7d33d9',
+                'runId': 'post-fix',
+                'hypothesisId': 'H1-fontspec',
+                'location': 'ats_preamble.py:strip_xetex_only_packages',
+                'message': 'Stripped XeTeX-only packages from AI LaTeX',
+                'data': {
+                    'removedPatternCount': len(removed),
+                    'stillHasFontspec': 'fontspec' in cleaned,
+                    'sourceLenBefore': len(source),
+                    'sourceLenAfter': len(cleaned),
+                },
+                'timestamp': int(_time.time() * 1000),
+            }
+            with open('/home/ashok/External/Ashok/.cursor/debug-7d33d9.log', 'a') as _dbg:
+                _dbg.write(_json.dumps(_payload) + '\n')
+        except Exception:
+            pass
+        # endregion
+        logger.warning(
+            "Stripped XeTeX-only packages from LaTeX (pdflatex compatibility): %s",
+            removed,
+        )
+    return cleaned
+
+
 def ensure_ats_resume_preamble(latex_source: str) -> str:
     """Normalize ATS resume LaTeX before validator/compile."""
     latex_source = repair_malformed_documentclass(latex_source)
+    latex_source = strip_xetex_only_packages(latex_source)
     latex_source = re.sub(r"\\textbar\b", r"$|$", latex_source)
     latex_source = repair_corrupted_ats_macros(latex_source)
     latex_source = expand_resume_items(latex_source)

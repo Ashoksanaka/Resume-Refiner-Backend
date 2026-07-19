@@ -607,6 +607,12 @@ def fix_latex_issues(latex_source: str) -> str:
     
     # Remove titlesec package if present (causes \hrule issues)
     latex_source = re.sub(r'\\usepackage(\[.*?\])?\{titlesec\}', '', latex_source)
+    # XeTeX-only packages break FormaTeX when engine=auto selects pdflatex
+    latex_source = re.sub(r'\\usepackage(\[.*?\])?\{fontspec\}', '', latex_source)
+    latex_source = re.sub(r'\\usepackage(\[.*?\])?\{unicode-math\}', '', latex_source)
+    latex_source = re.sub(r'\\setmainfont(\[.*?\])?\{[^}]*\}', '', latex_source)
+    latex_source = re.sub(r'\\setsansfont(\[.*?\])?\{[^}]*\}', '', latex_source)
+    latex_source = re.sub(r'\\setmonofont(\[.*?\])?\{[^}]*\}', '', latex_source)
     
     # Remove any \titleformat or \titlespacing commands
     latex_source = re.sub(r'\\titleformat\{[^}]*\}.*?(?=\\|\n\n|\Z)', '', latex_source, flags=re.DOTALL)

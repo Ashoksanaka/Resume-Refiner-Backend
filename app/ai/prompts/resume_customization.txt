@@ -134,7 +134,8 @@ FORBIDDEN:
 - Using \small for summary or section body text (\small is only for the contact line macro)
 - Adding companies, schools, certifications, skills, projects, or metrics not in profile JSON
 - Adding section titles for keys not in SELECTED_SECTIONS
-- Loading packages not in the template (no titlesec, fontawesome5, fancyhdr, tabularx, textcomp)
+- Loading packages not in the template (no fontspec, unicode-math, titlesec, fontawesome5, fancyhdr, tabularx, textcomp) — templates compile with pdflatex
+- Using \\setmainfont / \\setsansfont / \\setmonofont
 - Using \\textbar for contact separators — use `$|$` instead
 - Using \\section* for section headings — use \\resumeSectionTitle instead
 - Inventing custom LaTeX commands not defined in the template preamble
